@@ -7,6 +7,8 @@
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
 - [Databricks CLI Commands](#databricks-cli-commands)
+  - [PowerShell helpers](#powershell-helpers)
+    - [List clusters across all profiles](#list-clusters-across-all-profiles)
 
 <br>
 <br>
@@ -30,6 +32,8 @@
 | `Ctrl+Shift+E` | Switches to the Explorer (left panel with the file/folder tree). |
 | `Ctrl+N` | Creates a new (unsaved) file. |
 | `Ctrl+R` | Open Recent — quickly reopen recent folders / workspace files. |
+| `Ctrl+B` | Toggle the side bar (Explorer etc.) — hide it to get more editing space. |
+| `` Ctrl+` `` | Toggle the integrated terminal. |
 
 <br><br>
 
@@ -83,3 +87,26 @@
 | `databricks configure --host <workspace URL>` | Sets up authentication to a workspace — points the CLI at your Databricks host, then prompts for a token. Stores it in the config so later commands know which workspace to talk to. |
 | `databricks auth profiles` | Lists all configured authentication profiles and their status (host, whether auth is valid). Handy when you connect to multiple workspaces — each profile is a named set of credentials in `~/.databrickscfg`. |
 | `databricks auth describe` | Shows the details of the currently active auth configuration — which host, profile, and auth method (token, OAuth) the CLI is using right now. Good for confirming you're pointed at the workspace you think you are. |
+| `databricks clusters create --json @compute-setup.json --profile Data_Engineering_001` | Creates a cluster from the JSON definition in `compute-setup.json`, targeting the Data_Engineering_001 profile. `@` = read JSON from that file. |
+
+<br><br>
+
+## PowerShell helpers
+
+Small PowerShell snippets that wrap the Databricks CLI to do things across profiles.
+
+### List clusters across all profiles
+
+```powershell
+databricks auth profiles -o json | ConvertFrom-Json |
+  Select-Object -ExpandProperty profiles |
+  ForEach-Object {
+    Write-Host "=== $($_.name) ===" -ForegroundColor Cyan
+    databricks clusters list --profile $_.name
+  }
+```
+
+- Reads all configured profiles as JSON, then loops over each one and lists its clusters.
+- `-o json` = output as JSON (so `ConvertFrom-Json` can turn it into objects).
+- `$_` = the current profile in the loop; `$_.name` = its name.
+- Note: serverless workspaces have no all-purpose clusters, so those profiles return empty. For serverless SQL compute use `databricks warehouses list` instead.
