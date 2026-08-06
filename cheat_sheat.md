@@ -6,6 +6,7 @@
   - [Install Python](#install-python)
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
+- [Databricks CLI Commands](#databricks-cli-commands)
 
 <br>
 <br>
@@ -71,5 +72,14 @@
 | `py -3.12 -m pip install pandas==2.2.3` | Installs an exact version (e.g. to match DBR 18). |
 | `py -3.12 -m pip show pandas` | Shows the installed version and where it landed — confirms it went into 3.12. |
 
----
+<br><br><br>
 
+# Databricks CLI Commands
+
+| Command | What it does |
+| --- | --- |
+| `databricks --help` (or `-h`) | Shows the top-level help — lists all available command groups and global options. |
+| `databricks <command> --help` (or `-h`) | Shows help for a specific command (its subcommands, flags, usage). E.g. `databricks clusters --help`. |
+| `databricks configure --host <workspace URL>` | Sets up authentication to a workspace — points the CLI at your Databricks host, then prompts for a token. Stores it in the config so later commands know which workspace to talk to. |
+| `databricks auth profiles` | Lists all configured authentication profiles and their status (host, whether auth is valid). Handy when you connect to multiple workspaces — each profile is a named set of credentials in `~/.databrickscfg`. |
+| `databricks auth describe` | Shows the details of the currently active auth configuration — which host, profile, and auth method (token, OAuth) the CLI is using right now. Good for confirming you're pointed at the workspace you think you are. |
