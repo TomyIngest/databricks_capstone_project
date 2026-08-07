@@ -11,6 +11,7 @@
   - [databricks YAML (DAB structure)](#databricks-yaml-dab-structure)
     - [`bundle`](#bundle)
     - [`include`](#include)
+    - [`targets`](#targets)
   - [PowerShell helpers](#powershell-helpers)
     - [List clusters across all profiles](#list-clusters-across-all-profiles)
 
@@ -124,6 +125,22 @@ include:
 ```
 - Tells the bundle which YAML files to load and merge — this is how you modularize (split jobs/pipelines into separate files under `resources/`).
 - `*` = files directly in the folder only. `resources/*/*.yml` = exactly one subfolder level deep. `resources/**/*.yml` = any depth, recursive (picks up all subfolders). Use `**` when modularizing into nested folders.
+
+### `targets`
+```yaml
+targets:
+  dev:
+    mode: development
+    workspace:
+      host: https://adb-....azuredatabricks.net
+      root_path: /Workspace/Users/<user>/.bundle/${bundle.name}/${bundle.target}
+```
+
+- Defines where the bundle deploys — without `targets`, deployment can't work. Deploy with `databricks bundle deploy -t <target>`.
+- Minimum per target: the **name** (`dev`, or `<company>_<env>` like `acme_dev` for multiple clients), **`mode`**, and **`workspace.host`**.
+- `mode` = `development` (resources prefixed `[dev name]`, schedules paused) or `production` (runs for real, no prefixes).
+- `workspace.host` = which workspace to target; pairs with the profile in `.databrickscfg` (same host) for auth.
+- `workspace.root_path` = where in the workspace the bundle files are stored. `${bundle.name}` and `${bundle.target}` are auto-filled, so each bundle/target gets its own isolated path (no clashes). Optional — auto-generated if omitted.
 
 
 ## PowerShell helpers
