@@ -2,7 +2,7 @@
   - [Command Palette](#command-palette)
   - [Files and panels](#files-and-panels)
   - [Markdown preview](#markdown-preview)
-- [Command Line prompts for Project](#command-line-prompts-for-project)
+- [Command Line prompts](#command-line-prompts)
   - [Install Python](#install-python)
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
@@ -47,7 +47,7 @@
 
 <br><br><br>
 
-# Command Line prompts for Project
+# Command Line prompts
 <br>
 
 ## Install Python
@@ -55,6 +55,8 @@
 | Command | What it does |
 | --- | --- |
 | `winget install Python.Python.3.12` | Installs the latest Python 3.12.x with binaries and sets up PATH automatically. |
+| `py -3.11 -m venv .venv_a` | Creates a virtual environment named `.venv_a` using Python 3.11. `py -3.11` = that specific Python, `-m venv` = run the built-in venv module, `.venv_a` = the folder it creates. Activate it with `.venv_a\Scripts\activate`. The leading dot makes it a hidden file/folder — handy so it stays out of the way and is easy to keep out of the git repo (via `.gitignore`). |
+| `.venv_a\Scripts\activate` | Activates the virtual environment. After it, the prompt shows `(.venv_a)` and `python` / `pip` point at that venv. Deactivate with `deactivate`. |
 
 <br><br>
 
