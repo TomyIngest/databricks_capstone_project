@@ -14,7 +14,7 @@ resources:
       tasks:
         - task_key: Run_notebook
           notebook_task:
-            notebook_path: resources/test.ipynb
+            notebook_path: Notebooks/test.ipynb
             source: WORKSPACE
           environment_key: Run_notebook_environment
       queue:
