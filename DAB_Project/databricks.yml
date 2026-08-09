@@ -7,6 +7,24 @@ bundle:
 include:
   - resources/*.yml
 
+resources:
+  jobs:
+    Testing_Job:
+      name: Testing_Job
+      tasks:
+        - task_key: Run_notebook
+          notebook_task:
+            notebook_path: resources/test.ipynb
+            source: WORKSPACE
+          environment_key: Run_notebook_environment
+      queue:
+        enabled: true
+      environments:
+        - environment_key: Run_notebook_environment
+          spec:
+            environment_version: "5"
+      performance_target: STANDARD
+
 
 targets:
   dev:
