@@ -3,7 +3,7 @@
   - [Files and panels](#files-and-panels)
   - [Markdown preview](#markdown-preview)
 - [Command Line prompts](#command-line-prompts)
-  - [Install Python](#install-python)
+  - [Install Python \& Configure Virtual Environments](#install-python--configure-virtual-environments)
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
 - [Databricks](#databricks)
@@ -55,13 +55,15 @@
 # Command Line prompts
 <br>
 
-## Install Python
+## Install Python & Configure Virtual Environments
 
 | Command | What it does |
 | --- | --- |
 | `winget install Python.Python.3.12` | Installs the latest Python 3.12.x with binaries and sets up PATH automatically. |
 | `py -3.11 -m venv .venv_a` | Creates a virtual environment named `.venv_a` using Python 3.11. `py -3.11` = that specific Python, `-m venv` = run the built-in venv module, `.venv_a` = the folder it creates. Activate it with `.venv_a\Scripts\activate`. The leading dot makes it a hidden file/folder — handy so it stays out of the way and is easy to keep out of the git repo (via `.gitignore`). |
 | `.venv_a\Scripts\activate` | Activates the virtual environment. After it, the prompt shows `(.venv_a)` and `python` / `pip` point at that venv. Deactivate with `deactivate`. |
+| `deactivate` | Deactivates the current virtual environment. The `(.venv_a)` prefix disappears from the prompt and `python` / `pip` point back at the global Python. |
+| `pip install databricks-connect==18` | Installs Databricks Connect v18 into the active venv — matches serverless environment version 5 (Python 3.12, Connect 18). Lets you run Spark code from VS Code against Databricks compute. Connect version must be ≤ the serverless environment's runtime; check `environment_version` in the job YAML (5→18, 4→17.3) and match it. |
 
 <br><br>
 
