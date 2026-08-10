@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .venv_*
 venv/
+typings
 
 # VS Code (osobné nastavenia)
 .vscode/
