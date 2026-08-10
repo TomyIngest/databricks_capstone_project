@@ -6,12 +6,14 @@
   - [Install Python \& Configure Virtual Environments](#install-python--configure-virtual-environments)
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
+  - [Python interactive (terminal)](#python-interactive-terminal)
 - [Databricks](#databricks)
   - [Databricks CLI Commands](#databricks-cli-commands)
   - [databricks YAML (DAB structure)](#databricks-yaml-dab-structure)
     - [`bundle`](#bundle)
     - [`include`](#include)
     - [`targets`](#targets)
+  - [Running python with Databricks Connect via terminal](#running-python-with-databricks-connect-via-terminal)
   - [PowerShell helpers](#powershell-helpers)
     - [List clusters across all profiles](#list-clusters-across-all-profiles)
 
@@ -85,6 +87,16 @@
 | `py -3.12 -m pip install pandas==2.2.3` | Installs an exact version (e.g. to match DBR 18). |
 | `py -3.12 -m pip show pandas` | Shows the installed version and where it landed — confirms it went into 3.12. |
 
+<br><br>
+
+## Python interactive (terminal)
+
+| Command | What it does |
+| --- | --- |
+| `python` | Starts the interactive Python prompt in the terminal. |
+| `exit()` | Exits the interactive Python prompt, back to the terminal. |
+| `python skript.py` | Runs a Python file with the active interpreter (activate the venv first to use it). |
+
 <br><br><br>
 
 # Databricks 
@@ -144,6 +156,26 @@ targets:
 - `workspace.host` = which workspace to target; pairs with the profile in `.databrickscfg` (same host) for auth.
 - `workspace.root_path` = where in the workspace the bundle files are stored. `${bundle.name}` and `${bundle.target}` are auto-filled, so each bundle/target gets its own isolated path (no clashes). Optional — auto-generated if omitted.
 
+<br><br>
+
+## Running python with Databricks Connect via terminal
+
+Run Spark from a script (`python file.py`). Independent of the Databricks extension panel; reads only what you pass + `.databrickscfg`. Must run from the venv that has `databricks-connect` installed.
+
+```python
+from databricks.connect import DatabricksSession
+
+# serverless
+spark = DatabricksSession.builder.profile("Data_Engineering_001").serverless(True).getOrCreate()
+
+# specific cluster
+spark = DatabricksSession.builder.profile("Data_Engineering_001").clusterId("<cluster-id>").getOrCreate()
+```
+
+- Profile required (no DEFAULT). Avoid it in code by setting `$env:DATABRICKS_CONFIG_PROFILE = "Data_Engineering_001"` first.
+- `databricks-connect` lives in the venv, not global Python — activate the venv or you get `No module named 'databricks'`.
+
+<br><br>
 
 ## PowerShell helpers
 
