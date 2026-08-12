@@ -1,13 +1,13 @@
-- [VS Code Shortcuts](#vs-code-shortcuts)
+- [🟡 VS Code Shortcuts](#-vs-code-shortcuts)
   - [Command Palette](#command-palette)
   - [Files and panels](#files-and-panels)
   - [Markdown preview](#markdown-preview)
-- [Command Line prompts](#command-line-prompts)
+- [🟡 Command Line prompts](#-command-line-prompts)
   - [Install Python \& Configure Virtual Environments](#install-python--configure-virtual-environments)
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
   - [Python interactive (terminal)](#python-interactive-terminal)
-- [Databricks](#databricks)
+- [🟡 Databricks](#-databricks)
   - [Databricks CLI Commands](#databricks-cli-commands)
   - [databricks YAML (DAB structure)](#databricks-yaml-dab-structure)
     - [`bundle`](#bundle)
@@ -16,11 +16,31 @@
   - [Running python with Databricks Connect via terminal](#running-python-with-databricks-connect-via-terminal)
   - [PowerShell helpers](#powershell-helpers)
     - [List clusters across all profiles](#list-clusters-across-all-profiles)
+- [🟡 Data Engineering](#-data-engineering)
+  - [Concepts](#concepts)
+    - [`Auto Loader`](#auto-loader)
+    - [`Delta Sharing`](#delta-sharing)
+      - [Provider setup (D2D / Unity Catalog)](#provider-setup-d2d--unity-catalog)
+      - [Provider setup (off Databricks / open-source server)](#provider-setup-off-databricks--open-source-server)
+    - [`Query Federation (Lakehouse Federation)`](#query-federation-lakehouse-federation)
+  - [Spark SQL](#spark-sql)
+  - [PySpark](#pyspark)
+  - [Databricks-specific vs open-source Spark](#databricks-specific-vs-open-source-spark)
+- [🟡 Additional Information](#-additional-information)
+  - [Debugging](#debugging)
+  - [Optimization](#optimization)
+    - [Predicate pushdown](#predicate-pushdown)
+    - [Column pruning](#column-pruning)
+    - [Partitioning](#partitioning)
+    - [Liquid clustering](#liquid-clustering)
+    - [OPTIMIZE](#optimize)
+    - [OPTIMIZE: partitioning vs liquid clustering](#optimize-partitioning-vs-liquid-clustering)
+    - [VACUUM](#vacuum)
 
 <br>
 <br>
 
-# VS Code Shortcuts
+# 🟡 VS Code Shortcuts
 <br>
 
 ## Command Palette
@@ -54,7 +74,7 @@
 
 <br><br><br>
 
-# Command Line prompts
+# 🟡 Command Line prompts
 <br>
 
 ## Install Python & Configure Virtual Environments
@@ -99,7 +119,7 @@
 
 <br><br><br>
 
-# Databricks 
+# 🟡 Databricks 
 <br>
 
 ## Databricks CLI Commands
@@ -196,3 +216,303 @@ databricks auth profiles -o json | ConvertFrom-Json |
 - `-o json` = output as JSON (so `ConvertFrom-Json` can turn it into objects).
 - `$_` = the current profile in the loop; `$_.name` = its name.
 - Note: serverless workspaces have no all-purpose clusters, so those profiles return empty. For serverless SQL compute use `databricks warehouses list` instead.
+<br><br><br>
+
+# 🟡 Data Engineering
+<br>
+
+## Concepts
+
+<br>
+
+### `Auto Loader`
+
+Auto Loader incrementally ingests new files from cloud storage (S3 / ADLS / GCS) into Delta tables. It's a Structured Streaming source with format `cloudFiles`. It tracks already-processed files in the **checkpoint** (RocksDB key-value store), so it's idempotent — each file is processed once. Configured entirely through `cloudFiles.*` read options. Use it for recurring/continuous ingestion; use `COPY INTO` for one-shot batch backfills.
+
+| Option | What it does |
+| --- | --- |
+| `cloudFiles.format` | The underlying file format: `json`, `csv`, `parquet`, `avro`, `text`, `binaryFile`. Required. |
+| `cloudFiles.schemaLocation` | Directory where the inferred schema is stored and schema evolution is tracked. Enables schema inference/evolution. Can be the same dir as the checkpoint. |
+| `cloudFiles.useNotifications` | `false` (default) = **directory listing** mode (periodically lists the source dir). `true` = **file notification** mode (subscribes to cloud notifications — SQS/SNS, Event Grid/Queue, Pub/Sub — scales to millions of files/hour, needs cloud permissions). Switching modes preserves the checkpoint's file tracking. |
+| `cloudFiles.schemaEvolutionMode` | How Auto Loader reacts to new columns: `addNewColumns` (default when no schema given — adds new cols, stream fails then restarts with new schema), `rescue` (puts unexpected data in `_rescued_data`, never fails), `failOnNewColumns` (stream fails on new col until schema fixed), `none` (ignores new cols; default when a schema *is* provided). `addNewColumnsWithTypeWidening` (DBR 16.4+, Public Preview) also widens types like int→long. |
+| `cloudFiles.inferColumnTypes` | `true` = infer actual types (int, timestamp...). `false` (default for most formats) = read everything as string. |
+| `cloudFiles.schemaHints` | Manually fix the type of specific columns while letting the rest be inferred. Used *instead of* a full schema (schema + `addNewColumns` isn't allowed — use hints). |
+| `cloudFiles.maxFilesPerTrigger` | Max number of new files processed per micro-batch (rate limit). Default 1000. |
+| `cloudFiles.maxBytesPerTrigger` | Max amount of data per micro-batch (e.g. `10g`). Soft limit. |
+| `cloudFiles.includeExistingFiles` | `true` (default) = also process files already in the dir when the stream first starts. `false` = only files that arrive after start. Only matters on first run. |
+| `cloudFiles.allowOverwrites` | `true` = reprocess a file if it's modified/overwritten. `false` (default since DBR 17.3 LTS) = each filename processed once even if changed. |
+| `cloudFiles.partitionColumns` | Hive-style partition columns to infer from the directory structure (e.g. `date=2025-01-01/`). |
+| `cloudFiles.backfillInterval` | Triggers an async backfill on a schedule (e.g. `1 day`) to guarantee eventual completeness — safety net for notification mode where a cloud event could be missed. |
+| `cloudFiles.cleanSource` | (DBR 16.4+) Archives processed files: `MOVE` (to another dir), `DELETE`, or `OFF` (default). |
+| `rescuedDataColumn` | Name of the column collecting data that didn't match the schema (default `_rescued_data`). Always present unless disabled. Nothing is silently dropped. |
+| `pathGlobfilter` | Only ingest files matching a glob pattern on the name (e.g. `*.png`, `*.json`). Filters *which* files to take — independent of `cloudFiles.format`, which decides *how* to parse them. |
+
+**PySpark**
+
+```python
+df = (spark.readStream
+    .format("cloudFiles")
+    .option("cloudFiles.format", "json")
+    .option("cloudFiles.schemaLocation", "/Volumes/cat/sch/vol/_schema")
+    .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+    .option("cloudFiles.inferColumnTypes", "true")
+    .option("cloudFiles.maxFilesPerTrigger", 500)
+    .load("/Volumes/cat/sch/vol/raw/"))
+
+(df.writeStream
+    .option("checkpointLocation", "/Volumes/cat/sch/vol/_checkpoint")
+    .trigger(availableNow=True)        # process all available files then stop
+    .toTable("cat.sch.bronze_events"))
+```
+
+**Spark SQL — `read_files()`**
+
+`read_files()` is the SQL-native way to use Auto Loader. With the `STREAM` keyword inside a streaming table it runs Auto Loader under the hood. Streaming form only works inside Lakeflow Declarative Pipelines (DLT).
+
+```sql
+-- Streaming (Auto Loader) inside a DLT pipeline
+CREATE OR REFRESH STREAMING TABLE bronze_events
+AS SELECT *
+FROM STREAM read_files(
+  '/Volumes/cat/sch/vol/raw/',
+  format => 'json',
+  schemaEvolutionMode => 'addNewColumns'
+);
+
+-- Batch one-off read (no STREAM = plain read, not Auto Loader)
+SELECT * FROM read_files('/Volumes/cat/sch/vol/raw/', format => 'json');
+```
+
+- **Idempotency lives in the checkpoint, not the discovery mode.** The mode is *how it finds* files; the checkpoint is *what it remembers*. You can switch listing ↔ notification without reprocessing.
+- **`schemaLocation` vs `checkpointLocation`:** schemaLocation stores the inferred/evolving schema; checkpointLocation stores stream progress + processed-file state. Can point at the same dir. In DLT both are managed automatically.
+- **Schema evolution restarts the stream:** with `addNewColumns`, when a new column appears the stream *fails once*, updates the stored schema, then a job restart picks it up. Configure the job to auto-restart.
+- **`_rescued_data`** captures anything that doesn't fit the schema (extra columns, type mismatches) so nothing is lost. Drop it with `schemaEvolutionMode => 'none'`.
+- **Trigger modes:** `availableNow=True` = batch-like, process everything currently available then stop (great for scheduled jobs). `processingTime="5 seconds"` = continuous micro-batches. Without a trigger it runs continuously by default.
+- **Managed file events (2025 GA):** newer notification mode where Databricks provisions/operates the queues on top of Unity Catalog external locations — removes the manual IAM/permission setup of classic `useNotifications`. Recommended for new pipelines.
+
+<br><br>
+
+### `Delta Sharing`
+
+Open protocol for sharing live data without copying. Recipient reads in place, read-only. Databricks-originated but open — recipient doesn't need Databricks. Two provider setups:
+
+| | Provider off Databricks (open) | Provider on Databricks (D2D) |
+| --- | --- | --- |
+| What you exchange | Provider sends you a config/profile file (token + endpoint) | You send provider your sharing identifier (`CURRENT_METASTORE()`) |
+| How recipient is created | `CREATE RECIPIENT x` → activation link → token | `CREATE RECIPIENT x USING ID '<your-metastore-id>'` |
+| How you read | `delta_sharing` / `.format("deltaSharing")` + profile file | share appears in UC → `CREATE CATALOG ... USING SHARE` → plain `SELECT` |
+| Token? | Yes, bearer token | No, identity via metastore ID |
+
+<br>
+
+#### <mark style="background-color: #FFF3CD">Provider setup (D2D / Unity Catalog)</mark>
+
+Order: **SHARE → ADD TABLE → RECIPIENT → GRANT.** These are UC governance commands, not DataFrame API — Python just wraps the same SQL.
+
+**SQL**
+
+```sql
+CREATE SHARE my_share;                                    -- 1. container
+ALTER SHARE my_share ADD TABLE main.sales.transactions;   -- 2. add specific table
+CREATE RECIPIENT acme_partner;                            -- 3. who (add USING ID '<metastore-id>' for D2D)
+GRANT SELECT ON SHARE my_share TO RECIPIENT acme_partner; -- 4. grant
+```
+
+**Python** — wrap the same SQL in `spark.sql()`:
+
+```python
+spark.sql("CREATE SHARE my_share")
+spark.sql("ALTER SHARE my_share ADD TABLE main.sales.transactions")
+spark.sql("CREATE RECIPIENT acme_partner")
+spark.sql("GRANT SELECT ON SHARE my_share TO RECIPIENT acme_partner")
+```
+
+Revoke: `REVOKE` / `DROP RECIPIENT` / `ALTER SHARE ... REMOVE TABLE`.
+
+<br>
+
+#### <mark style="background-color: #FFF3CD">Provider setup (off Databricks / open-source server)</mark>
+
+No SQL — the provider runs an open-source Delta Sharing server and defines everything in `config.yaml`. Same `share → schema → table` hierarchy, expressed as YAML. The server is the gatekeeper; `location` points at the Delta table in cloud storage.
+
+```yaml
+version: 1
+shares:
+  - name: "share1"
+    schemas:
+      - name: "default"
+        tables:
+          - name: "cars"
+            location: "s3a://my-bucket/cars"        # path to the Delta table
+authorization:
+  bearerToken: "my-secret-token"                    # token the recipient must send
+host: "localhost"
+port: 9999
+endpoint: "/delta-sharing"
+```
+
+The recipient then gets a **profile file** (`.share`) — endpoint + token — and reads with it:
+
+```json
+{
+  "shareCredentialsVersion": 1,
+  "endpoint": "https://sharing.example.com/delta-sharing",
+  "bearerToken": "my-secret-token"
+}
+```
+
+The recipient then reads table as
+
+```python
+df = (spark.read
+    .format("deltaSharing")
+    .load("/path/to/config.share#share1.default.cars"))
+```
+
+<br><br>
+
+### `Query Federation (Lakehouse Federation)`
+
+Query data in **external databases** (PostgreSQL, MySQL, Snowflake, Redshift, SQL Server, BigQuery...) directly from Databricks — **without copying/ingesting it first**. The data stays in the source; you query it remotely as if it were a Unity Catalog table.
+
+**Setup — 3 steps:**
+
+```sql
+-- 1. connection to the external DB
+CREATE CONNECTION my_pg TYPE postgresql
+OPTIONS (host '...', port '5432', user '...', password '...');
+
+-- 2. foreign catalog = mirror of that DB in Unity Catalog
+CREATE FOREIGN CATALOG pg_catalog USING CONNECTION my_pg
+OPTIONS (database 'sales_db');
+
+-- 3. query it like a normal table
+SELECT * FROM pg_catalog.public.customers;
+```
+
+**Key points:**
+- **No data copying** — you query the source directly, data stays where it is.
+- **Query pushdown** — Databricks pushes filters/aggregations into the source DB to minimize data transferred over the network.
+- **Unity Catalog governance** applies — same permissions, lineage as native tables.
+- **Read-only** (primarily) — for reading/analysis, not writing back to the source.
+- Good for: quick exploration, joining external data with Databricks tables, avoiding duplication. Not for: heavy repeated production workloads on big data (loads the source DB, slower than native Delta).
+
+**Don't confuse with Delta Sharing:**
+- **Delta Sharing** = someone shares *their* Delta data *to you* via an open protocol (provider → recipient).
+- **Query Federation** = *you* connect *out* to a foreign (non-Databricks) database and query it remotely.
+
+<br><br>
+
+## Spark SQL
+
+<br>
+
+| Command | What it does |
+| --- | --- |
+| `INSERT INTO <table_name> SELECT ...` | Appends the query result to the table — existing rows stay. |
+| `INSERT OVERWRITE <table_name> SELECT ...` | Replaces the **entire** contents of the table with the query result — old rows gone. |
+| `TRUNCATE TABLE <table_name>` | Deletes all rows but keeps the table and its schema (empties it). |
+| `UPDATE <table_name> SET col = val WHERE ...` | Changes values in existing rows matching the `WHERE` condition. |
+| `ALTER TABLE <table_name> RENAME COLUMN old TO new` | Renames a column. **Delta only, requires column mapping enabled.** Metadata-only — no data rewrite (so it's cheap even on huge tables).<br>Enable first: `ALTER TABLE <table_name> SET TBLPROPERTIES ('delta.columnMapping.mode' = 'name')`<br>Without column mapping the command fails — parquet can't rename a column in place without rewriting files.<br>Don't fake it with `UPDATE <table_name> SET new_col = old_col` — that rewrites all rows and leaves you with a duplicate column instead of a rename. |
+| `ALTER TABLE` | `RENAME TO new_name` — renames the table.<br>`ADD COLUMN c TYPE` — adds a column (existing rows get NULL; no DEFAULT at add-time on Delta).<br>`DROP COLUMN c` — drops a column (Delta: needs column mapping).<br>`RENAME COLUMN old TO new` — renames a column (Delta: needs column mapping; metadata-only).<br>`ALTER COLUMN c ...` — changes a column: `SET/DROP NOT NULL`, `TYPE`, `SET DEFAULT`, `COMMENT`, `FIRST/AFTER`.<br>`SET TBLPROPERTIES (k = v)` — sets table config (column mapping, CDF, deletion vectors...).<br>`UNSET TBLPROPERTIES (k)` — removes a table property.<br>`ADD/DROP CONSTRAINT ...` — adds/drops constraints (CHECK, PK, FK).<br>`ADD/DROP PARTITION ...` — manages partitions.<br>`CLUSTER BY (cols)` — sets/changes liquid clustering columns.<br>`SET LOCATION ...` — points the table at a different storage path.<br>`SET OWNER TO principal` — changes table ownership (UC). |
+
+
+
+<br><br>
+
+## PySpark
+
+<br><br>
+
+## Databricks-specific vs open-source Spark
+
+| Feature | Databricks or Spark? | Note |
+| --- | --- | --- |
+| Structured Streaming | Spark | Native streaming engine. Auto Loader is built on top of it. |
+| Auto Loader (`cloudFiles`) | Databricks | The `cloudFiles` source + notification mode, `_rescued_data`, RocksDB file tracking. Not in open-source Spark. |
+| `read_files()` | Databricks | SQL-native wrapper; uses Auto Loader when streaming. |
+| Delta Sharing | Databricks-originated, **open** | Open protocol for sharing live Delta data without copying. Donated to Linux Foundation — recipient doesn't need Databricks. |
+| Query Federation (Lakehouse Federation) | Databricks | Query external DBs (Postgres, Snowflake, MySQL...) in place via UC foreign catalogs. Not in open-source Spark. |
+
+<br><br><br>
+
+# 🟡 Additional Information
+<br>
+
+## Debugging
+<br>
+
+| Tool | When to use it |
+| --- | --- |
+| **Spark UI → thread dump** | Hanging job, no error — snapshot of all JVM driver/executor thread states. Shows blocked/waiting threads. |
+| **Interactive Debugger** | Stepping through code — needs explicit breakpoints set beforehand. |
+| **`%debug`** | Post-mortem after an **exception** — inspects the stack of a raised error. |
+
+<br><br>
+
+## Optimization
+<br>
+
+### Predicate pushdown
+
+Filters (`WHERE`) get "pushed down" to the file read — Spark uses Parquet min/max stats to skip row-groups that don't match, instead of reading everything and filtering after. Mostly automatic; you enable it by writing good SQL:
+- Filter early (put `WHERE` before joins/aggregations).
+- Filter on raw columns — `WHERE region = 'EU'` pushes down; `WHERE UPPER(region) = 'EU'` usually breaks it (a function around the column kills pushdown).
+
+<br><br>
+
+### Column pruning
+
+Parquet is columnar, so Spark reads only the columns you actually ask for — **if you name them**. `SELECT *` forces it to read every column.
+- `SELECT region, amount FROM sales` → reads 2 columns.
+- `SELECT * FROM sales` → reads all columns. Avoid when you don't need them.
+
+<br><br>
+
+### Partitioning
+
+`PARTITIONED BY (col)` at write time stores data in separate folders per value. A `WHERE` on the partition column skips whole folders without reading them (partition pruning).
+- Best for low-cardinality columns (e.g. `date`, `country`).
+- Too many small partitions on a high-cardinality column hurts — that's where liquid clustering wins instead.
+
+<br><br>
+
+### Liquid clustering
+
+`CLUSTER BY (col)` — modern replacement for partitioning + ZORDER. Physically co-locates data by the clustering key, so file skipping works even on high-cardinality columns. Incremental: `OPTIMIZE` only reclusters newly-written data, so it stays cheap.
+- Not compatible with partitioning or ZORDER (use one approach).
+- `OPTIMIZE FULL` forces a full recluster — needed after first enabling clustering or changing clustering keys.
+
+<br><br>
+
+### OPTIMIZE
+
+Compacts many small files into fewer, larger, evenly-sized files and improves min/max stats (which makes skipping/pushdown more effective). On liquid-clustered tables it also reclusters.
+- Incremental on clustered tables — most runs are quick; a re-run with no new data is a no-op.
+- Solves the "small files problem" (lots of tiny files = slow scans).
+
+<br><br>
+
+### OPTIMIZE: partitioning vs liquid clustering
+
+`OPTIMIZE` does more on a clustered table. With partitioning it only compacts small files (ordering is handled by the folders). With liquid clustering there are no folders, so `OPTIMIZE` also physically reorders rows by the clustering key.
+
+| | Partitioning + OPTIMIZE | Liquid clustering + OPTIMIZE |
+| --- | --- | --- |
+| Bin-packing (compacts small files) | Yes | Yes |
+| Reclustering (reorders rows by key) | No | Yes |
+| Where it happens | Within each partition folder | Across the whole table (no folders) |
+
+- **Bin-packing** = merges many small files into fewer, evenly-sized ones (fixes the small-files problem).
+- **Reclustering** = rearranges rows so similar key values sit together, updating each file's min/max stats for data skipping.
+- On clustered tables reclustering is **incremental** — only newly-written data is reorganized, so most runs are quick and a re-run with no new data is a no-op.
+  
+<br><br>
+
+### VACUUM
+
+Deletes old data files no longer referenced by the Delta table (leftovers from updates/deletes/OPTIMIZE) past a retention period (default 7 days). Frees storage.
+- Doesn't speed up queries directly — it's cleanup, not layout optimization.
+- Removes the ability to time-travel to versions older than what you vacuumed. Don't set retention too low.
+
+<br><br>
