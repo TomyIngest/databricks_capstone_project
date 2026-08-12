@@ -7,7 +7,7 @@
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
   - [Python interactive (terminal)](#python-interactive-terminal)
-- [🟡 Databricks](#-databricks)
+- [🟡 Databricks Asset Bundles](#-databricks-asset-bundles)
   - [Databricks CLI Commands](#databricks-cli-commands)
   - [databricks YAML (DAB structure)](#databricks-yaml-dab-structure)
     - [`bundle`](#bundle)
@@ -119,7 +119,8 @@
 
 <br><br><br>
 
-# 🟡 Databricks 
+# 🟡 Databricks Asset Bundles
+
 <br>
 
 ## Databricks CLI Commands
@@ -415,6 +416,10 @@ SELECT * FROM pg_catalog.public.customers;
 | `UPDATE <table_name> SET col = val WHERE ...` | Changes values in existing rows matching the `WHERE` condition. |
 | `ALTER TABLE <table_name> RENAME COLUMN old TO new` | Renames a column. **Delta only, requires column mapping enabled.** Metadata-only — no data rewrite (so it's cheap even on huge tables).<br>Enable first: `ALTER TABLE <table_name> SET TBLPROPERTIES ('delta.columnMapping.mode' = 'name')`<br>Without column mapping the command fails — parquet can't rename a column in place without rewriting files.<br>Don't fake it with `UPDATE <table_name> SET new_col = old_col` — that rewrites all rows and leaves you with a duplicate column instead of a rename. |
 | `ALTER TABLE` | `RENAME TO new_name` — renames the table.<br>`ADD COLUMN c TYPE` — adds a column (existing rows get NULL; no DEFAULT at add-time on Delta).<br>`DROP COLUMN c` — drops a column (Delta: needs column mapping).<br>`RENAME COLUMN old TO new` — renames a column (Delta: needs column mapping; metadata-only).<br>`ALTER COLUMN c ...` — changes a column: `SET/DROP NOT NULL`, `TYPE`, `SET DEFAULT`, `COMMENT`, `FIRST/AFTER`.<br>`SET TBLPROPERTIES (k = v)` — sets table config (column mapping, CDF, deletion vectors...).<br>`UNSET TBLPROPERTIES (k)` — removes a table property.<br>`ADD/DROP CONSTRAINT ...` — adds/drops constraints (CHECK, PK, FK).<br>`ADD/DROP PARTITION ...` — manages partitions.<br>`CLUSTER BY (cols)` — sets/changes liquid clustering columns.<br>`SET LOCATION ...` — points the table at a different storage path.<br>`SET OWNER TO principal` — changes table ownership (UC). |
+| `COMMENT ON TABLE <table_name> IS 'comment'` | Adds/updates a comment on an **existing** table. |
+| `CREATE TABLE <table_name> ... COMMENT 'comment'` | Sets a comment **at creation time**.
+| `ALTER TABLE <table_name> SET TBLPROPERTIES ('comment' = 'comment')` | Alternative way to set a table comment via table properties. |
+| `COMMENT ON COLUMN <table_name>.col IS 'comment'` | Adds/updates a comment on a specific **column**. |
 
 
 
@@ -442,11 +447,14 @@ SELECT * FROM pg_catalog.public.customers;
 ## Debugging
 <br>
 
+**Key split: is the job HANGING (no error) or did it CRASH (exception)?** Different problems, different tools.
+
 | Tool | When to use it |
 | --- | --- |
-| **Spark UI → thread dump** | Hanging job, no error — snapshot of all JVM driver/executor thread states. Shows blocked/waiting threads. |
-| **Interactive Debugger** | Stepping through code — needs explicit breakpoints set beforehand. |
-| **`%debug`** | Post-mortem after an **exception** — inspects the stack of a raised error. |
+| **Spark UI → thread dump** | Job is **hanging** — stuck, no progress, **no error**. Takes a snapshot of all JVM driver/executor thread states, showing which threads are blocked/waiting and on what. Answers *"why is it stuck doing nothing?"* |
+| **Executor / driver logs** | Job **crashed** with an exception. Most detailed view — captures the full traceback from the executor side, including which data/types caused the failure. Tedious to dig through, but the most complete. Answers *"why did it fail?"* |
+| **`%debug`** | **Post-mortem** after an exception — drops you into the state at the moment of failure. Returns the driver-side (consolidated) traceback the driver got back from the nodes. Partial for distributed code (UDFs) — shows the exception, not the full executor context. |
+| **Interactive Debugger** | **Live** debugging — step through code line by line, inspect variables as they change (like stepping through an Excel formula). Needs breakpoints set beforehand. **Driver-side only** — can't see into executors, so useless for a hang or for distributed UDF errors. |
 
 <br><br>
 
