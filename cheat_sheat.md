@@ -23,6 +23,7 @@
       - [Provider setup (D2D / Unity Catalog)](#provider-setup-d2d--unity-catalog)
       - [Provider setup (off Databricks / open-source server)](#provider-setup-off-databricks--open-source-server)
     - [`Query Federation (Lakehouse Federation)`](#query-federation-lakehouse-federation)
+    - [`Pipeline execution modes (Lakeflow Declarative Pipelines)`](#pipeline-execution-modes-lakeflow-declarative-pipelines)
   - [Spark SQL](#spark-sql)
   - [PySpark](#pyspark)
   - [Databricks-specific vs open-source Spark](#databricks-specific-vs-open-source-spark)
@@ -403,6 +404,30 @@ SELECT * FROM pg_catalog.public.customers;
 - **Query Federation** = *you* connect *out* to a foreign (non-Databricks) database and query it remotely.
 
 <br><br>
+
+### `Pipeline execution modes (Lakeflow Declarative Pipelines)`
+
+Two independent settings combine — one from each axis:
+- **Development vs Production** = how the pipeline behaves (cluster lifecycle + retries).
+- **Triggered vs Continuous** = how long/often it runs.
+
+| Setting | What it does |
+| --- | --- |
+| **Development** | Cluster is **reused** (not torn down) for fast iteration; **no automatic retries** on failure (see errors immediately). For building/debugging. |
+| **Production** | Cluster is **terminated** after the run (saves cost); **retry logic** applied on failure (resilient). For real runs. |
+| **Triggered** | Runs once, processes currently available data, then **stops**. Batch-like — for scheduled runs. |
+| **Continuous** | Runs **non-stop**, processing data as it arrives (real-time / near-real-time). |
+
+**The 4 combinations:**
+
+| Combination | What it means in practice |
+| --- | --- |
+| **Development + Triggered** | Building/debugging a batch pipeline. Cluster stays warm between runs, no retries, processes available data then stops. Fastest iteration loop. |
+| **Development + Continuous** | Building/debugging a streaming pipeline. Runs non-stop with a reused cluster and no retries — you watch it process live data and see failures instantly. |
+| **Production + Triggered** | Scheduled batch job in prod. Spins up a cluster, processes available data, tears the cluster down, retries on failure. Cost-efficient scheduled ingestion. |
+| **Production + Continuous** | Always-on streaming job in prod. Runs continuously with retry logic; cluster stays up because the pipeline never stops. Real-time production processing. |
+
+Note: Dev/Prod and Triggered/Continuous are **separate axes** — any of the 4 combinations is valid.
 
 ## Spark SQL
 
