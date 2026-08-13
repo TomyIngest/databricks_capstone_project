@@ -1,12 +1,12 @@
-- [🟡 VS Code Shortcuts](#-vs-code-shortcuts)
-  - [Command Palette](#command-palette)
-  - [Files and panels](#files-and-panels)
-  - [Markdown preview](#markdown-preview)
+- [🟡 VS Code ](#-vs-code-)
+  - [`Shortcuts`](#shortcuts)
 - [🟡 Command Line prompts](#-command-line-prompts)
   - [Install Python \& Configure Virtual Environments](#install-python--configure-virtual-environments)
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
   - [Python interactive (terminal)](#python-interactive-terminal)
+- [🟡 Python](#-python)
+  - [System commands](#system-commands)
 - [🟡 Databricks Asset Bundles](#-databricks-asset-bundles)
   - [Databricks CLI Commands](#databricks-cli-commands)
   - [databricks YAML (DAB structure)](#databricks-yaml-dab-structure)
@@ -27,7 +27,7 @@
   - [Spark SQL](#spark-sql)
   - [PySpark](#pyspark)
   - [Databricks-specific vs open-source Spark](#databricks-specific-vs-open-source-spark)
-- [🟡 Additional Information](#-additional-information)
+- [🟡 Additional Information on Databricks Platform](#-additional-information-on-databricks-platform)
   - [Debugging](#debugging)
   - [Optimization](#optimization)
     - [Predicate pushdown](#predicate-pushdown)
@@ -38,47 +38,34 @@
     - [OPTIMIZE: partitioning vs liquid clustering](#optimize-partitioning-vs-liquid-clustering)
     - [VACUUM](#vacuum)
 
-<br>
-<br>
+<br><br>
 
-# 🟡 VS Code Shortcuts
-<br>
+# 🟡 VS Code <br>
 
-## Command Palette
+## `Shortcuts` 
+<br>
 
 | Shortcut | What it does |
 | --- | --- |
 | `Ctrl+Shift+P` | Opens the Command Palette: search for any VS Code command. The heart of control: type a command name (e.g. `Python: Select Interpreter`) and run it without digging through menus. |
 | `Ctrl+Shift+G` | Opens the Source Control panel — stage changes, write commit messages, commit, and sync (push/pull) to GitHub. Shows which files changed. |
-
-<br><br>
-
-## Files and panels
-
-| Shortcut | What it does |
-| --- | --- |
+| `Ctrl+Shift+V` | Opens the rendered preview of a `.md` file (replaces the editor with the preview). |
+| `Ctrl+K` → `V` | Opens the preview **to the side** (split): edit on the left, see the result live on the right. It's a two-step shortcut — press `Ctrl+K`, release, then `V`. |
 | `Ctrl+Shift+E` | Switches to the Explorer (left panel with the file/folder tree). |
 | `Ctrl+N` | Creates a new (unsaved) file. |
 | `Ctrl+R` | Open Recent — quickly reopen recent folders / workspace files. |
 | `Ctrl+B` | Toggle the side bar (Explorer etc.) — hide it to get more editing space. |
 | `` Ctrl+` `` | Toggle the integrated terminal. |
 
+
+
 <br><br>
 
-## Markdown preview
-
-
-| Shortcut | What it does |
-| --- | --- |
-| `Ctrl+Shift+V` | Opens the rendered preview of a `.md` file (replaces the editor with the preview). |
-| `Ctrl+K` → `V` | Opens the preview **to the side** (split): edit on the left, see the result live on the right. It's a two-step shortcut — press `Ctrl+K`, release, then `V`. |
-
-<br><br><br>
-
 # 🟡 Command Line prompts
+
 <br>
 
-## Install Python & Configure Virtual Environments
+## Install Python & Configure Virtual Environments 
 
 | Command | What it does |
 | --- | --- |
@@ -88,7 +75,7 @@
 | `deactivate` | Deactivates the current virtual environment. The `(.venv_a)` prefix disappears from the prompt and `python` / `pip` point back at the global Python. |
 | `pip install databricks-connect==18` | Installs Databricks Connect v18 into the active venv — matches serverless environment version 5 (Python 3.12, Connect 18). Lets you run Spark code from VS Code against Databricks compute. Connect version must be ≤ the serverless environment's runtime; check `environment_version` in the job YAML (5→18, 4→17.3) and match it. |
 
-<br><br>
+<br>
 
 ## Check versions
 
@@ -98,7 +85,7 @@
 | `python --version` | Prints the version of the default Python (the one on PATH). |
 | `py --list` | Lists all installed Python versions via the `py` launcher. |
 
-<br><br>
+<br>
 
 ## Install packages into a specific Python
 
@@ -108,7 +95,7 @@
 | `py -3.12 -m pip install pandas==2.2.3` | Installs an exact version (e.g. to match DBR 18). |
 | `py -3.12 -m pip show pandas` | Shows the installed version and where it landed — confirms it went into 3.12. |
 
-<br><br>
+<br>
 
 ## Python interactive (terminal)
 
@@ -117,6 +104,20 @@
 | `python` | Starts the interactive Python prompt in the terminal. |
 | `exit()` | Exits the interactive Python prompt, back to the terminal. |
 | `python skript.py` | Runs a Python file with the active interpreter (activate the venv first to use it). |
+
+<br><br><br>
+
+# 🟡 Python
+
+<br>
+
+## System commands
+
+Python's `sys` module — interacting with the interpreter and runtime environment.
+
+| Command | What it does |
+| --- | --- |
+| `sys.path.append("path")` | Adds a folder to Python's module search path at runtime, so you can import modules from a location that isn't normally on the path. Needs `import sys` first. E.g. `sys.path.append("../src")` to import shared/local modules from another folder. |
 
 <br><br><br>
 
@@ -451,6 +452,11 @@ Note: Dev/Prod and Triggered/Continuous are **separate axes** — any of the 4 c
 <br><br>
 
 ## PySpark
+<br>
+
+| Command | What it does |
+| --- | --- |
+| `create_map(*cols)` | Builds a map (key-value) column from alternating key, value columns. E.g. `df.withColumn("m", create_map(lit("a"), col("x"), lit("b"), col("y")))` → map `{a: x, b: y}`. Needs `from pyspark.sql.functions import create_map, lit, col`. |
 
 <br><br>
 
@@ -466,7 +472,7 @@ Note: Dev/Prod and Triggered/Continuous are **separate axes** — any of the 4 c
 
 <br><br><br>
 
-# 🟡 Additional Information
+# 🟡 Additional Information on Databricks Platform
 <br>
 
 ## Debugging
