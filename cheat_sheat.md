@@ -118,6 +118,9 @@ Python's `sys` module — interacting with the interpreter and runtime environme
 | Command | What it does |
 | --- | --- |
 | `sys.path.append("path")` | Adds a folder to Python's module search path at runtime, so you can import modules from a location that isn't normally on the path. Needs `import sys` first. E.g. `sys.path.append("../src")` to import shared/local modules from another folder. |
+| `os.getcwd()` | Returns the current working directory as a string (the folder the Python process is running from). `os` = built-in module, import it first with `import os`. Handy for building relative paths or checking where a script is executing. |
+| `os.path.abspath(path)` | Returns the absolute (full) path of a relative path — resolves it against the current working directory. E.g. `os.path.abspath("data.csv")` → `/home/user/project/data.csv`. |
+| `os.path.join(a, b, ...)` | Joins path parts into one path using the correct separator for the OS (`/` on Linux/Mac, `\` on Windows). E.g. `os.path.join("folder", "sub", "file.csv")`. Safer than manually gluing strings with slashes. |
 
 <br><br><br>
 
