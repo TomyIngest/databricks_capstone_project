@@ -18,6 +18,19 @@
     - [List clusters across all profiles](#list-clusters-across-all-profiles)
 - [🟡 Data Engineering](#-data-engineering)
   - [Concepts](#concepts)
+    - [`Lakeflow Spark Declarative Pipelines (SDP)`](#lakeflow-spark-declarative-pipelines-sdp)
+      - [**`SQL`**](#sql)
+        - [**Streaming table from Auto Loader (`read_files`)**](#streaming-table-from-auto-loader-read_files)
+        - [**Streaming table from another pipeline table (`STREAM(table)`)** — between layers (bronze → silver)](#streaming-table-from-another-pipeline-table-streamtable--between-layers-bronze--silver)
+        - [**Materialized view** (batch — no `STREAM`)](#materialized-view-batch--no-stream)
+        - [**Expectations / constraints — `ON VIOLATION` actions**](#expectations--constraints--on-violation-actions)
+        - [**Schema options inside `read_files(...) only`** — format `option => 'value'`](#schema-options-inside-read_files-only--format-option--value)
+        - [**Full reference — everything usable on a streaming table**](#full-reference--everything-usable-on-a-streaming-table)
+        - [**`CREATE FLOW`** — separate the target table from the flow(s) that write into it](#create-flow--separate-the-target-table-from-the-flows-that-write-into-it)
+      - [**`Python`**](#python)
+        - [**Full reference — everything usable on a streaming table (Python)**](#full-reference--everything-usable-on-a-streaming-table-python)
+        - [**`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)](#create-flow-python--multiple-sources-into-one-streaming-table-fan-in)
+        - [**Overview of `dp.methods`**](#overview-of-dpmethods)
     - [`Auto Loader`](#auto-loader)
     - [`Delta Sharing`](#delta-sharing)
       - [Provider setup (D2D / Unity Catalog)](#provider-setup-d2d--unity-catalog)
@@ -230,6 +243,311 @@ databricks auth profiles -o json | ConvertFrom-Json |
 ## Concepts
 
 <br>
+
+### `Lakeflow Spark Declarative Pipelines (SDP)`
+
+Declarative framework for batch & streaming ETL in SQL/Python. **DLT → Lakeflow (Spark) Declarative Pipelines / SDP** — DLT (Delta Live Tables) was the original name, now Lakeflow pipelines. Old DLT code runs without migration. Terminology on the test: DLT = old name, Lakeflow pipelines / SDP = current. Auto Loader inside SDP is `read_files()` (replaced the old `cloud_files()`); schema and checkpoint dirs are managed automatically by the framework.
+
+#### **`SQL`**
+
+##### **Streaming table from Auto Loader (`read_files`)**
+```sql
+CREATE OR REFRESH STREAMING TABLE bronze_orders(
+  CONSTRAINT valid_id     EXPECT (id IS NOT NULL),                                 -- warn
+  CONSTRAINT valid_amount EXPECT (amount >= 0)        ON VIOLATION DROP ROW,       -- drop
+  CONSTRAINT valid_date   EXPECT (order_date IS NOT NULL) ON VIOLATION FAIL UPDATE -- fail
+) AS
+SELECT *
+FROM STREAM read_files('/path/to/landing', format => 'json');
+```
+
+##### **Streaming table from another pipeline table (`STREAM(table)`)** — between layers (bronze → silver)
+```sql
+CREATE OR REFRESH STREAMING TABLE silver_orders(
+  CONSTRAINT valid_id     EXPECT (id IS NOT NULL),                           -- warn
+  CONSTRAINT valid_amount EXPECT (amount >= 0)  ON VIOLATION DROP ROW,       -- drop
+  CONSTRAINT valid_cust   EXPECT (customer_id IS NOT NULL) ON VIOLATION FAIL UPDATE -- fail
+) AS
+SELECT * FROM STREAM(bronze_orders);
+```
+
+##### **Materialized view** (batch — no `STREAM`)
+```sql
+CREATE OR REFRESH MATERIALIZED VIEW orders_summary(
+  CONSTRAINT valid_total EXPECT (total IS NOT NULL),                    -- warn
+  CONSTRAINT non_neg     EXPECT (total >= 0)  ON VIOLATION DROP ROW,    -- drop
+  CONSTRAINT has_cust    EXPECT (customer_id IS NOT NULL) ON VIOLATION FAIL UPDATE -- fail
+) AS
+SELECT customer_id, SUM(amount) AS total
+FROM orders
+GROUP BY customer_id;
+```
+
+- `CREATE OR REFRESH STREAMING TABLE` = incremental (needs `STREAM`); `MATERIALIZED VIEW` = batch, recomputed (no `STREAM`).
+- `STREAM read_files(...)` = Auto Loader; `STREAM(table)` = stream from another pipeline table.
+- Expectations work on all three (streaming table from read_files, from STREAM(table), and materialized view) — but only inside an SDP pipeline.
+
+##### **Expectations / constraints — `ON VIOLATION` actions**
+
+| Syntax | Action on violation |
+| --- | --- |
+| `CONSTRAINT name EXPECT (cond)` | **Warn** — invalid record is **written**, but tracked in metrics |
+| `CONSTRAINT name EXPECT (cond) ON VIOLATION DROP ROW` | **Drop** — invalid record **discarded** before writing |
+| `CONSTRAINT name EXPECT (cond) ON VIOLATION FAIL UPDATE` | **Fail** — **stops the whole pipeline** on an invalid record |
+
+##### **Schema options inside `read_files(...) only`** — format `option => 'value'`
+This can be used only with read_files and not sith stream(table) or materialized view
+
+| Option | What it does / values | Default if omitted |
+| --- | --- | --- |
+| `schema => '...'` | Full schema hardcoded — disables inference entirely | inference on (schema inferred) |
+| `schemaHints => '...'` | Force types for specific columns, rest inferred (e.g. `'user_id BIGINT, created_at TIMESTAMP'`) | no hints — all inferred |
+| `inferColumnTypes => true` | Infer column **types** too (not everything as string) | `false` |
+| `rescuedDataColumn => '...'` | Column name for data that doesn't fit the schema | `_rescued_data` |
+| `schemaEvolutionMode => '...'` | Behaviour on a **new column**:<br>`addNewColumns` — stream fails with `UnknownFieldException`, adds the new column on restart<br>`rescue` — new column not added to schema, data goes to `_rescued_data`, stream doesn't fail<br>`failOnNewColumns` — stream fails, must fix schema manually<br>`none` — new columns ignored, nothing added or rescued | `addNewColumns` |
+| `schemaLocation => '...'` | Where the inferred schema is stored | managed automatically by SDP |
+
+##### **Full reference — everything usable on a streaming table**
+
+```sql
+CREATE OR REFRESH STREAMING TABLE bronze_orders(
+  -- column properties
+  order_id      BIGINT NOT NULL COMMENT 'unique order id',
+  customer_id   BIGINT,
+  region        STRING,
+  amount        DOUBLE DEFAULT 0.0,
+  order_date    TIMESTAMP,
+  row_id        BIGINT GENERATED ALWAYS AS IDENTITY,
+  ingested_at   TIMESTAMP GENERATED ALWAYS AS (current_timestamp()),
+  ssn           STRING MASK mask_ssn,
+
+  -- expectations (3 types)
+  CONSTRAINT valid_id     EXPECT (order_id IS NOT NULL),                           -- warn
+  CONSTRAINT valid_amount EXPECT (amount >= 0)            ON VIOLATION DROP ROW,    -- drop
+  CONSTRAINT valid_date   EXPECT (order_date IS NOT NULL) ON VIOLATION FAIL UPDATE, -- fail
+
+  -- table constraints (informational, Unity Catalog only)
+  CONSTRAINT pk PRIMARY KEY (order_id),
+  CONSTRAINT fk FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+)
+-- table clauses
+COMMENT 'Raw orders ingested from landing zone'
+TBLPROPERTIES ('quality' = 'bronze', 'pipelines.channel' = 'CURRENT')
+CLUSTER BY (customer_id)                 -- or: CLUSTER BY AUTO / PARTITIONED BY (region)
+DEFAULT COLLATION UTF8_BINARY
+SCHEDULE EVERY 1 HOUR                     -- or: TRIGGER ON UPDATE AT MOST EVERY 5 MINUTES
+WITH ROW FILTER my_filter_fn ON (region)
+AS
+SELECT *
+FROM STREAM read_files(
+  '/path/to/landing',
+  format              => 'json',
+  schemaHints         => 'order_id BIGINT, order_date TIMESTAMP',
+  schemaEvolutionMode => 'addNewColumns',
+  rescuedDataColumn   => '_rescued_data',
+  inferColumnTypes    => true
+);
+```
+
+**Column properties** (per column, inside the `( )`)
+
+| Property | What it does |
+| --- | --- |
+| `NOT NULL` | Column can't be null. |
+| `COMMENT 'text'` | Column description. |
+| `DEFAULT expr` | Default value when none supplied. |
+| `GENERATED ALWAYS AS (expr)` | Computed column from an expression (e.g. `current_timestamp()`). |
+| `GENERATED ALWAYS AS IDENTITY` | Auto-increment column. |
+| `MASK fn` | Column masking — applies a masking function (sensitive data). |
+
+**Expectations** (data quality — inside the `( )`)
+
+| Syntax | Action on violation |
+| --- | --- |
+| `CONSTRAINT n EXPECT (cond)` | **Warn** — invalid record written, tracked in metrics. |
+| `CONSTRAINT n EXPECT (cond) ON VIOLATION DROP ROW` | **Drop** — invalid record discarded before writing. |
+| `CONSTRAINT n EXPECT (cond) ON VIOLATION FAIL UPDATE` | **Fail** — stops the whole pipeline. |
+
+**Table constraints** (informational only, Unity Catalog pipeline required)
+
+| Constraint | What it does |
+| --- | --- |
+| `PRIMARY KEY (col)` | Informational primary key (not enforced, for lineage/tools). |
+| `FOREIGN KEY (col) REFERENCES t(col)` | Informational foreign key. |
+
+**Table clauses** (after the `)`, before `AS`)
+
+| Clause | What it does |
+| --- | --- |
+| `COMMENT 'text'` | Table description (shown in Catalog Explorer). |
+| `TBLPROPERTIES ('k'='v')` | User-defined properties / metadata (e.g. `pipelines.channel` = `CURRENT`/`PREVIEW`). |
+| `CLUSTER BY (col, ...)` | Liquid clustering on chosen columns. Recommended over `PARTITIONED BY` for streaming tables. |
+| `CLUSTER BY AUTO` | Automatic liquid clustering — Databricks picks the keys. |
+| `PARTITIONED BY (col, ...)` | Partition by columns. **Mutually exclusive with `CLUSTER BY`.** |
+| `DEFAULT COLLATION UTF8_BINARY` | Forces default collation (mandatory if the schema's collation isn't UTF8_BINARY). |
+| `SCHEDULE EVERY n HOUR/DAY/...` / `SCHEDULE CRON '...'` | Refresh schedule for the table. |
+| `TRIGGER ON UPDATE AT MOST EVERY ...` | Alternative to SCHEDULE — refresh on update, rate-limited (min 1 min). |
+| `WITH ROW FILTER fn ON (col)` | Row-level security filter function. |
+
+<br>
+
+##### **`CREATE FLOW`** — separate the target table from the flow(s) that write into it
+
+Normally a streaming table defines the table and its source together. `CREATE FLOW` splits them: define an empty target table, then one or more flows that write into it. Main use case: **multiple sources into one streaming table (fan-in)** — a normal `CREATE STREAMING TABLE ... AS SELECT` has only one source.
+
+```sql
+-- 1. target table (no source)
+CREATE OR REFRESH STREAMING TABLE all_orders;
+
+-- 2. multiple flows writing into it
+CREATE FLOW orders_eu AS
+INSERT INTO all_orders BY NAME
+SELECT * FROM STREAM read_files('/eu/orders', format => 'json');
+
+CREATE FLOW orders_us AS
+INSERT INTO all_orders BY NAME
+SELECT * FROM STREAM read_files('/us/orders', format => 'json');
+```
+
+- `INSERT INTO <table> BY NAME` — `BY NAME` maps columns by name (not position), safer.
+- Each flow has its own name → tracked separately.
+- Use for fan-in / union of streams into one table, or appending from different pipeline branches.
+<br><br>
+
+
+#### **`Python`**
+
+##### **Full reference — everything usable on a streaming table (Python)**
+
+```python
+from pyspark import pipelines as dp
+from pyspark.sql.functions import col
+
+@dp.table(
+    name="my_catalog.schema.orders",
+    comment="Raw orders ingested from landing zone",
+    table_properties={"quality": "bronze", "pipelines.channel": "CURRENT"},
+    cluster_by=["customer_id"],           # or partition_cols=["region"] (mutually exclusive)
+    schema="""
+        order_id BIGINT NOT NULL COMMENT 'unique order id',
+        customer_id BIGINT,
+        region STRING,
+        amount DOUBLE,
+        order_date TIMESTAMP
+    """
+)
+# expectations (3 types)
+@dp.expect("valid_id", "order_id IS NOT NULL")                    # warn
+@dp.expect_or_drop("valid_amount", "amount >= 0")                # drop
+@dp.expect_or_fail("valid_date", "order_date IS NOT NULL")       # fail
+def bronze_orders():
+    return (
+        spark.readStream.format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .option("cloudFiles.schemaHints", "order_id BIGINT, order_date TIMESTAMP")
+        .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+        .option("cloudFiles.rescuedDataColumn", "_rescued_data")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .load("/path/to/landing")
+    )
+```
+
+**SQL → Python mapping**
+
+| SQL | Python |
+| --- | --- |
+| `CREATE OR REFRESH STREAMING TABLE` | `@dp.table` |
+| `CREATE OR REFRESH MATERIALIZED VIEW` | `@dp.materialized_view` |
+| `COMMENT 'text'` (table) | `comment="text"` in decorator |
+| `TBLPROPERTIES (...)` | `table_properties={...}` |
+| `CLUSTER BY (col)` | `cluster_by=["col"]` |
+| `PARTITIONED BY (col)` | `partition_cols=["col"]` |
+| `STREAM read_files(...)` | `spark.readStream.format("cloudFiles")` |
+| `STREAM(table)` | `spark.readStream.table("table")` |
+| batch source | `spark.read.table("table")` |
+| `schemaHints => '...'` | `.option("cloudFiles.schemaHints", "...")` |
+| `schemaEvolutionMode => '...'` | `.option("cloudFiles.schemaEvolutionMode", "...")` |
+| `rescuedDataColumn => '...'` | `.option("cloudFiles.rescuedDataColumn", "...")` |
+| `inferColumnTypes => true` | `.option("cloudFiles.inferColumnTypes", "true")` |
+
+**Expectations — decorator per action**
+
+| SQL | Python (single) | Python (multiple) | Action |
+| --- | --- | --- | --- |
+| `EXPECT (cond)` | `@dp.expect("n", "cond")` | `@dp.expect_all({`<br>&nbsp;&nbsp;`"valid_amount": "amount >= 0",`<br>&nbsp;&nbsp;`"valid_id": "id IS NOT NULL",`<br>&nbsp;&nbsp;`"valid_date": "order_date IS NOT NULL"`<br>`})` | **Warn** |
+| `EXPECT (cond) ON VIOLATION DROP ROW` | `@dp.expect_or_drop("n", "cond")` | `@dp.expect_all_or_drop({...})` | **Drop** |
+| `EXPECT (cond) ON VIOLATION FAIL UPDATE` | `@dp.expect_or_fail("n", "cond")` | `@dp.expect_all_or_fail({...})` | **Fail** |
+
+<br>
+
+##### **`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)
+
+```python
+from pyspark import pipelines as dp
+
+# 1. target table (no source)
+dp.create_streaming_table("all_orders")
+
+# 2. multiple flows writing into it
+@dp.append_flow(target="all_orders")
+def orders_eu():
+    return (
+        spark.readStream.format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .load("/eu/orders")
+    )
+
+@dp.append_flow(target="all_orders")
+def orders_us():
+    return (
+        spark.readStream.format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .load("/us/orders")
+    )
+```
+
+##### **Overview of `dp.methods`** 
+
+**Dataset definition**
+
+| Method | What it does |
+| --- | --- |
+| `@dp.table` | Streaming table (decorator over a function) |
+| `@dp.materialized_view` | Materialized view |
+| `@dp.temporary_view` | Temporary view (pipeline-scoped, doesn't persist) |
+
+**Fan-in / flows**
+
+| Method | What it does |
+| --- | --- |
+| `dp.create_streaming_table(...)` | Empty target table with no source (for fan-in) |
+| `@dp.append_flow(target=...)` | Flow that writes into an existing streaming table |
+
+**Expectations (data quality)**
+
+| Method | Action |
+| --- | --- |
+| `@dp.expect("n","cond")` | Warn (single) |
+| `@dp.expect_or_drop(...)` | Drop (single) |
+| `@dp.expect_or_fail(...)` | Fail (single) |
+| `@dp.expect_all({...})` | Warn (multiple at once) |
+| `@dp.expect_all_or_drop({...})` | Drop (multiple at once) |
+| `@dp.expect_all_or_fail({...})` | Fail (multiple at once) |
+
+**CDC / SCD**
+
+| Method | What it does |
+| --- | --- |
+| `dp.create_auto_cdc_flow(...)` | CDC / SCD Type 1/2 from a change feed |
+| `dp.create_auto_cdc_from_snapshot_flow(...)` | CDC / SCD from snapshots (instead of a change feed) |
+
+**External output**
+
+| Method | What it does |
+| --- | --- |
+| `dp.create_sink(...)` | Write pipeline output to an external target (e.g. Kafka, or a Delta table outside the pipeline) |
+
+<br><br>
 
 ### `Auto Loader`
 
