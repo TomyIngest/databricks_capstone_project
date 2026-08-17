@@ -256,6 +256,18 @@ databricks auth profiles -o json | ConvertFrom-Json |
 ### `Lakeflow Spark Declarative Pipelines (SDP)`
 
 Declarative framework for batch & streaming ETL in SQL/Python. **DLT → Lakeflow (Spark) Declarative Pipelines / SDP** — DLT (Delta Live Tables) was the original name, now Lakeflow pipelines. Old DLT code runs without migration. Terminology on the test: DLT = old name, Lakeflow pipelines / SDP = current. Auto Loader inside SDP is `read_files()` (replaced the old `cloud_files()`); schema and checkpoint dirs are managed automatically by the framework.
+<br>
+
+**`External sink vs SDP managed table`** — an external sink is a plain Delta table that a stream flows into, but it doesn't inherit SDP managed-table features. What it loses:
+
+- **Orchestration & dependency tracking** — a managed table is part of the dataflow graph (DAG); SDP knows what depends on it and refreshes in the right order. A sink is outside the graph — the pipeline just writes to it, doesn't track it as a dataset.
+- **Incremental refresh logic** — SDP figures out what's new and processes only that; managed streaming tables / materialized views have this built in.
+- **Automatic checkpoint & schema management** — handled by SDP for managed tables; with a sink you manage more yourself.
+- **Data quality / expectations reporting** — expectations and their metrics are tied to managed datasets and the pipeline UI.
+- **Automatic optimizations** — layout and file management done by SDP on managed tables.
+- **Unity Catalog lineage** — managed datasets have full lineage in the pipeline graph; a sink is more disconnected.
+
+Trade-off: external sink gives **full Delta property control** (properties, `ALTER TABLE`, UniForm/Iceberg) but loses the built-in framework features above.
 
 #### **`SQL`**
 
