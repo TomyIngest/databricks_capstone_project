@@ -44,11 +44,13 @@
   - [PySpark](#pyspark)
   - [Databricks-specific vs open-source Spark](#databricks-specific-vs-open-source-spark)
 - [🟡 Additional Information on Databricks Platform](#-additional-information-on-databricks-platform)
-  - [Access Control (Unity Catalog governance)](#access-control-unity-catalog-governance)
-    - [Admin roles \& ownership](#admin-roles--ownership)
-    - [Privileges](#privileges)
-  - [Debugging](#debugging)
-  - [Optimization](#optimization)
+  - [**Unity Catalog governance**](#unity-catalog-governance)
+    - [**Tags**](#tags)
+    - [**Access Control**](#access-control)
+      - [`Admin roles & ownership`](#admin-roles--ownership)
+      - [`Privileges`](#privileges)
+  - [**Debugging**](#debugging)
+  - [**Optimization**](#optimization)
     - [Predicate pushdown](#predicate-pushdown)
     - [Column pruning](#column-pruning)
     - [Partitioning](#partitioning)
@@ -901,10 +903,39 @@ dbutils.notebook.exit("PASS")   # ends the child + sends "PASS" back to parent
 # 🟡 Additional Information on Databricks Platform
 <br>
 
-## Access Control (Unity Catalog governance)
+## **Unity Catalog governance**
 <br>
 
-### Admin roles & ownership
+### **Tags** 
+
+Tags = key-value labels on catalog objects (catalog, schema, table, column) for organization, discovery, and governance (e.g. cost tracking, PII flagging, data classification).
+
+```sql
+-- table
+ALTER TABLE my_catalog.schema.orders
+SET TAGS ('pii' = 'true', 'domain' = 'sales');
+
+-- column
+ALTER TABLE my_catalog.schema.orders
+ALTER COLUMN email SET TAGS ('classification' = 'sensitive');
+
+-- schema
+ALTER SCHEMA my_catalog.schema SET TAGS ('layer' = 'silver');
+
+-- catalog
+ALTER CATALOG my_catalog SET TAGS ('env' = 'prod');
+
+-- remove a tag
+ALTER TABLE my_catalog.schema.orders UNSET TAGS ('pii');
+```
+
+- `SET TAGS ('key' = 'value', ...)` — add/update; `UNSET TAGS ('key')` — remove.
+- Work on catalog, schema, table, and column.
+- Value can be empty (`'key' = ''`) if you only need the key as a label.
+- Used for discovery/search, governance policies, and cost/PII tracking.
+
+### **Access Control**
+#### `Admin roles & ownership`
 
 Admins = platform scope (account → metastore → workspace). Owner = a specific object.
 
@@ -918,9 +949,9 @@ Admins = platform scope (account → metastore → workspace). Owner = a specifi
 - **Owner** = whoever created the object (or was assigned ownership). Full control: alter, drop, grant to others. Exists at each level — catalog owner, schema owner, table owner.
 - **Who can grant privileges on an object:** the object's owner, the owner of its parent catalog/schema, a user with `MANAGE` on it, a metastore admin, or an account admin.
 
-<br><br>
+<br>
 
-### Privileges
+#### `Privileges`
 
 **Usage (prerequisites — needed to reach any object):**
 - `USE CATALOG` — required to work with anything in a catalog.
@@ -944,7 +975,7 @@ Admins = platform scope (account → metastore → workspace). Owner = a specifi
 <br><br>
 
 
-## Debugging
+## **Debugging**
 <br>
 
 **Key split: is the job HANGING (no error) or did it CRASH (exception)?** Different problems, different tools.
@@ -958,7 +989,7 @@ Admins = platform scope (account → metastore → workspace). Owner = a specifi
 
 <br><br>
 
-## Optimization
+## **Optimization**
 <br>
 
 ### Predicate pushdown
@@ -967,7 +998,7 @@ Filters (`WHERE`) get "pushed down" to the file read — Spark uses Parquet min/
 - Filter early (put `WHERE` before joins/aggregations).
 - Filter on raw columns — `WHERE region = 'EU'` pushes down; `WHERE UPPER(region) = 'EU'` usually breaks it (a function around the column kills pushdown).
 
-<br><br>
+<br>
 
 ### Column pruning
 
@@ -975,7 +1006,7 @@ Parquet is columnar, so Spark reads only the columns you actually ask for — **
 - `SELECT region, amount FROM sales` → reads 2 columns.
 - `SELECT * FROM sales` → reads all columns. Avoid when you don't need them.
 
-<br><br>
+<br>
 
 ### Partitioning
 
@@ -983,7 +1014,7 @@ Parquet is columnar, so Spark reads only the columns you actually ask for — **
 - Best for low-cardinality columns (e.g. `date`, `country`).
 - Too many small partitions on a high-cardinality column hurts — that's where liquid clustering wins instead.
 
-<br><br>
+<br>
 
 ### Liquid clustering
 
@@ -991,7 +1022,7 @@ Parquet is columnar, so Spark reads only the columns you actually ask for — **
 - Not compatible with partitioning or ZORDER (use one approach).
 - `OPTIMIZE FULL` forces a full recluster — needed after first enabling clustering or changing clustering keys.
 
-<br><br>
+<br>
 
 ### OPTIMIZE
 
@@ -999,7 +1030,7 @@ Compacts many small files into fewer, larger, evenly-sized files and improves mi
 - Incremental on clustered tables — most runs are quick; a re-run with no new data is a no-op.
 - Solves the "small files problem" (lots of tiny files = slow scans).
 
-<br><br>
+<br>
 
 ### OPTIMIZE: partitioning vs liquid clustering
 
@@ -1015,7 +1046,7 @@ Compacts many small files into fewer, larger, evenly-sized files and improves mi
 - **Reclustering** = rearranges rows so similar key values sit together, updating each file's min/max stats for data skipping.
 - On clustered tables reclustering is **incremental** — only newly-written data is reorganized, so most runs are quick and a re-run with no new data is a no-op.
   
-<br><br>
+<br>
 
 ### VACUUM
 
@@ -1023,7 +1054,7 @@ Deletes old data files no longer referenced by the Delta table (leftovers from u
 - Doesn't speed up queries directly — it's cleanup, not layout optimization.
 - Removes the ability to time-travel to versions older than what you vacuumed. Don't set retention too low.
 
-<br><br>
+<br>
 
 ### Predictive Optimization
 
@@ -1075,4 +1106,4 @@ Databricks automatically runs table maintenance for you — no manual scheduling
 
 **Fully automated table = `CLUSTER BY AUTO` (auto layout) + Predictive Optimization enabled (auto maintenance + executes the clustering).**
 
-<br><br2>
+<br><br>
