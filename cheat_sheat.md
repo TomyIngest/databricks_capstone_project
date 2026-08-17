@@ -32,15 +32,21 @@
         - [**`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)](#create-flow-python--multiple-sources-into-one-streaming-table-fan-in)
         - [**Overview of `dp.methods`**](#overview-of-dpmethods)
     - [`Auto Loader`](#auto-loader)
+      - [`_rescued_data`](#_rescued_data)
+      - [`Options`](#options)
     - [`Delta Sharing`](#delta-sharing)
       - [Provider setup (D2D / Unity Catalog)](#provider-setup-d2d--unity-catalog)
       - [Provider setup (off Databricks / open-source server)](#provider-setup-off-databricks--open-source-server)
     - [`Query Federation (Lakehouse Federation)`](#query-federation-lakehouse-federation)
     - [`Pipeline execution modes (Lakeflow Declarative Pipelines)`](#pipeline-execution-modes-lakeflow-declarative-pipelines)
+    - [`Modularization`](#modularization)
   - [Spark SQL](#spark-sql)
   - [PySpark](#pyspark)
   - [Databricks-specific vs open-source Spark](#databricks-specific-vs-open-source-spark)
 - [🟡 Additional Information on Databricks Platform](#-additional-information-on-databricks-platform)
+  - [Access Control (Unity Catalog governance)](#access-control-unity-catalog-governance)
+    - [Admin roles \& ownership](#admin-roles--ownership)
+    - [Privileges](#privileges)
   - [Debugging](#debugging)
   - [Optimization](#optimization)
     - [Predicate pushdown](#predicate-pushdown)
@@ -50,6 +56,7 @@
     - [OPTIMIZE](#optimize)
     - [OPTIMIZE: partitioning vs liquid clustering](#optimize-partitioning-vs-liquid-clustering)
     - [VACUUM](#vacuum)
+    - [Predictive Optimization](#predictive-optimization)
 
 <br><br>
 
@@ -553,14 +560,44 @@ def orders_us():
 
 Auto Loader incrementally ingests new files from cloud storage (S3 / ADLS / GCS) into Delta tables. It's a Structured Streaming source with format `cloudFiles`. It tracks already-processed files in the **checkpoint** (RocksDB key-value store), so it's idempotent — each file is processed once. Configured entirely through `cloudFiles.*` read options. Use it for recurring/continuous ingestion; use `COPY INTO` for one-shot batch backfills.
 
+#### `_rescued_data` 
+ captures any data that doesn't fit the schema (extra columns, type mismatches) — so nothing is silently lost. It's controlled by the `cloudFiles.rescuedDataColumn` option, but whether it appears **by default** depends on how the schema is set.
+
+**With schema inference (no explicit schema):**
+- `_rescued_data` is added **automatically** — even without setting `rescuedDataColumn`.
+- Default `schemaEvolutionMode` here is `addNewColumns` (new columns get added to the schema).
+- To rename it: `.option("cloudFiles.rescuedDataColumn", "_my_rescued")`.
+- You **can't stop it from being created** via options — to not have it, either drop it after reading (`df.drop("_rescued_data")` / `select` only the columns you want) or switch to an explicit schema.
+
+**With an explicit schema (`.schema(...)`):**
+- `_rescued_data` is **NOT added automatically** — you only get it if you ask for it via `.option("cloudFiles.rescuedDataColumn", "name")` (or include it in the schema).
+- Default `schemaEvolutionMode` here is `none` (schema is locked, new columns are not added).
+- So if a new column appears in a later batch:
+  - rescued column present → its data goes into `_rescued_data` (not lost), stream keeps running.
+  - rescued column absent → its data is ignored/dropped.
+
+**Key point:** `schemaEvolutionMode` and `rescuedDataColumn` are two independent knobs.
+- `schemaEvolutionMode` = whether/how new **columns** get added to the schema.
+- `rescuedDataColumn` = the name (and presence) of the column that catches non-matching data.
+
+| Situation | Rescued column? | Default evolution mode |
+| --- | --- | --- |
+| Inference, nothing set | Yes, auto (`_rescued_data`) | `addNewColumns` |
+| Inference + `rescuedDataColumn` | Yes, your name | `addNewColumns` |
+| Explicit schema, nothing set | No | `none` |
+| Explicit schema + `rescuedDataColumn` | Yes, your name | `none` |
+
+
+#### `Options`
 | Option | What it does |
 | --- | --- |
 | `cloudFiles.format` | The underlying file format: `json`, `csv`, `parquet`, `avro`, `text`, `binaryFile`. Required. |
 | `cloudFiles.schemaLocation` | Directory where the inferred schema is stored and schema evolution is tracked. Enables schema inference/evolution. Can be the same dir as the checkpoint. |
 | `cloudFiles.useNotifications` | `false` (default) = **directory listing** mode (periodically lists the source dir). `true` = **file notification** mode (subscribes to cloud notifications — SQS/SNS, Event Grid/Queue, Pub/Sub — scales to millions of files/hour, needs cloud permissions). Switching modes preserves the checkpoint's file tracking. |
-| `cloudFiles.schemaEvolutionMode` | How Auto Loader reacts to new columns: `addNewColumns` (default when no schema given — adds new cols, stream fails then restarts with new schema), `rescue` (puts unexpected data in `_rescued_data`, never fails), `failOnNewColumns` (stream fails on new col until schema fixed), `none` (ignores new cols; default when a schema *is* provided). `addNewColumnsWithTypeWidening` (DBR 16.4+, Public Preview) also widens types like int→long. |
+| `cloudFiles.schemaEvolutionMode` | How Auto Loader reacts to new columns:<br>`addNewColumns` — adds new cols, stream fails then restarts with new schema (default when no schema given).<br>`rescue` — puts unexpected data in `_rescued_data`, never fails.<br>`failOnNewColumns` — stream fails on new col until schema fixed.<br>`none` — ignores new cols (default when a schema *is* provided).<br>`addNewColumnsWithTypeWidening` — also
 | `cloudFiles.inferColumnTypes` | `true` = infer actual types (int, timestamp...). `false` (default for most formats) = read everything as string. |
 | `cloudFiles.schemaHints` | Manually fix the type of specific columns while letting the rest be inferred. Used *instead of* a full schema (schema + `addNewColumns` isn't allowed — use hints). |
+| `cloudFiles.rescuedDataColumn` | Name of the column that catches data not fitting the schema (default `_rescued_data`).<br>With **schema inference** it's added automatically — this option only renames it.<br>With an **explicit schema** it's **not** added unless you set this option — that's when it actually matters.<br>Example: `.option("cloudFiles.rescuedDataColumn", "_my_rescued")`
 | `cloudFiles.maxFilesPerTrigger` | Max number of new files processed per micro-batch (rate limit). Default 1000. |
 | `cloudFiles.maxBytesPerTrigger` | Max amount of data per micro-batch (e.g. `10g`). Soft limit. |
 | `cloudFiles.includeExistingFiles` | `true` (default) = also process files already in the dir when the stream first starts. `false` = only files that arrive after start. Only matters on first run. |
@@ -751,6 +788,74 @@ Two independent settings combine — one from each axis:
 
 Note: Dev/Prod and Triggered/Continuous are **separate axes** — any of the 4 combinations is valid.
 
+<br><br>
+
+### `Modularization`
+
+Three ways to reuse code from elsewhere in Databricks. Different use cases — don't confuse them.
+
+**1. `import` — from a `.py` module**
+
+Standard Python import from a `.py` file in your workspace/repo (Git folders). Best for structured projects with real modules. The module must be on the Python path — either in the same repo/folder, or add its path:
+
+```python
+import sys
+sys.path.append("/Workspace/Repos/my_project/src")
+
+from my_module import validate_df
+
+result = validate_df(df)
+```
+
+**2. `%run` — inline another notebook**
+
+Pastes the other notebook's content into yours — all its functions/variables become available. Shared context (same variables, same spark session).
+
+```python
+%run ./notebook_name
+
+# functions defined in notebook_name are now callable
+result = my_validation_function(df)
+```
+
+**3. `dbutils.notebook.run()` — run a notebook as a separate job**
+
+Runs another notebook in an **isolated** context (separate run). You do NOT share functions/variables — only a single string value comes back via `dbutils.notebook.exit()`.
+
+```python
+# parent — 3rd arg is a dict of parameters passed to the child (parameters are optional)
+result = dbutils.notebook.run("/path/child", 60, {"table_name": "sales", "env": "prod"})
+print(result)   # "PASS" or "FAIL"
+```
+
+```python
+# child — reads params via widgets, returns a value via exit()
+table_name = dbutils.widgets.get("table_name")
+env = dbutils.widgets.get("env")
+
+# ... validation logic ...
+
+dbutils.notebook.exit("PASS")   # ends the child + sends "PASS" back to parent
+```
+
+- Params: parent sends a **dict** (3rd arg) → child reads each with `dbutils.widgets.get("name")`. Dict key must match the widget name.
+- `dbutils.notebook.exit(value)` ends the notebook immediately (code after it doesn't run) and returns `value`. Can appear in multiple branches (e.g. inside `if/else`) — whichever the run reaches. Value is always a string (use JSON for more).
+
+**Comparison:**
+
+| Method | Source | Shares context? | Returns |
+| --- | --- | --- | --- |
+| `import` | `.py` module | Yes (imported names) | Whatever the function returns |
+| `%run` | Notebook | Yes (all funcs/vars) | Nothing — just injects code |
+| `dbutils.notebook.run()` | Notebook | No (isolated run) | One string via `dbutils.notebook.exit()` |
+
+**Key points:**
+- `%run` / `import` = reuse code in the *same* context (call functions directly).
+- `dbutils.notebook.run()` = orchestration — run a notebook standalone, get one string back.
+- `dbutils.notebook.exit(value)` is the ONLY way a notebook returns a value to `notebook.run()`. `print` / `return` don't work for this. Value is always a string (use JSON for more).
+
+<br><br>
+
 ## Spark SQL
 
 <br>
@@ -795,6 +900,49 @@ Note: Dev/Prod and Triggered/Continuous are **separate axes** — any of the 4 c
 
 # 🟡 Additional Information on Databricks Platform
 <br>
+
+## Access Control (Unity Catalog governance)
+<br>
+
+### Admin roles & ownership
+
+Admins = platform scope (account → metastore → workspace). Owner = a specific object.
+
+| Role | Scope |
+| --- | --- |
+| Account admin | Whole account (users, workspaces, metastores) |
+| Metastore admin | One UC metastore (all catalogs in it) |
+| Workspace admin | One workspace |
+| Owner | A specific object (catalog/schema/table), at every level |
+
+- **Owner** = whoever created the object (or was assigned ownership). Full control: alter, drop, grant to others. Exists at each level — catalog owner, schema owner, table owner.
+- **Who can grant privileges on an object:** the object's owner, the owner of its parent catalog/schema, a user with `MANAGE` on it, a metastore admin, or an account admin.
+
+<br><br>
+
+### Privileges
+
+**Usage (prerequisites — needed to reach any object):**
+- `USE CATALOG` — required to work with anything in a catalog.
+- `USE SCHEMA` — required to work with anything in a schema.
+
+**Data:**
+- `SELECT` — read from a table/view.
+- `MODIFY` — insert/update/delete data in a table.
+- `READ VOLUME` / `WRITE VOLUME` — read/write volumes.
+- `EXECUTE` — run a function/model.
+
+**Create:**
+- `CREATE CATALOG` / `CREATE SCHEMA` / `CREATE TABLE` / `CREATE VOLUME` / `CREATE FUNCTION` / `CREATE MATERIALIZED VIEW` / `CREATE MODEL` / `CREATE CONNECTION` / `CREATE FOREIGN CATALOG` ...
+
+**Governance / special:**
+- `ALL PRIVILEGES` — all applicable privileges on an object + its children. On a table = SELECT + MODIFY + APPLY TAG. Excludes MANAGE, READ METADATA, EXTERNAL USE (anti data-exfiltration).
+- `MANAGE` — manage an object (grant to others). Note: still needs USE CATALOG + USE SCHEMA for data access.
+- `APPLY TAG` — add tags.
+- `BROWSE` — discover/see an object without usage rights (for discovery).
+
+<br><br>
+
 
 ## Debugging
 <br>
@@ -876,3 +1024,55 @@ Deletes old data files no longer referenced by the Delta table (leftovers from u
 - Removes the ability to time-travel to versions older than what you vacuumed. Don't set retention too low.
 
 <br><br>
+
+### Predictive Optimization
+
+Databricks automatically runs table maintenance for you — no manual scheduling. AI-powered: it analyzes usage patterns + data layout, decides which tables benefit and when, and runs the ops on **serverless compute**. It's the "autopilot" over the manual OPTIMIZE / VACUUM / etc. above.
+
+**What it always does (on any enabled UC managed table):**
+- **`OPTIMIZE`** — compacts small files, improves data locality.
+- **`VACUUM`** — removes unreferenced old files, saves storage.
+- **`ANALYZE`** — keeps statistics fresh for query planning + data skipping.
+
+**Clustering — ONLY if the table has clustering defined:**
+- Predictive Optimization is the **engine** that performs clustering, but only if the table declares it.
+- `CLUSTER BY (col)` → it clusters by *your* chosen key.
+- `CLUSTER BY AUTO` → it also **picks the clustering keys itself** (based on query patterns).
+- No clustering on the table → it does NOT cluster (nothing to cluster by). Maintenance (OPTIMIZE/VACUUM/ANALYZE) still runs.
+
+**So: enabling Predictive Optimization on a plain table (no CLUSTER BY) still gives you OPTIMIZE + VACUUM + ANALYZE — just no clustering.** For fully automated layout too, add `CLUSTER BY AUTO`.
+
+**How to enable** — 4 levels, inherited downward (account → catalog → schema → table):
+
+| Level | How |
+| --- | --- |
+| Account | UI (account console → Feature enablement) |
+| Catalog | `ALTER CATALOG x ENABLE PREDICTIVE OPTIMIZATION` |
+| Schema | `ALTER SCHEMA x ENABLE PREDICTIVE OPTIMIZATION` |
+| Table | `ALTER TABLE x ENABLE PREDICTIVE OPTIMIZATION` |
+
+- Values: `ENABLE` / `DISABLE` / `INHERIT` (INHERIT = follow parent).
+- Setting cascades down; an object with explicit ENABLE/DISABLE is not overridden by its parent.
+- Enabled by default for accounts created on/after 2024-11-11 (may already be on — verify).
+
+**Key points:**
+- **Unity Catalog managed tables only** (Delta + Iceberg). Not external tables, not Delta Sharing recipient tables.
+- Runs on **serverless compute** — billed under a serverless jobs SKU.
+- **Does NOT run ZORDER** — ignores Z-ordered files. (Another reason liquid clustering is the future.)
+- VACUUM retention = `delta.deletedFileRetentionDuration` (default 7 days) — how long VACUUM keeps unreferenced data files before deleting them. Set higher *before* enabling if you need longer time travel:
+  `ALTER TABLE t SET TBLPROPERTIES ('delta.deletedFileRetentionDuration' = 'interval 30 days');`
+  Value is an interval string (`'interval 30 days'`), not a number.
+- Time travel reaches back only as far as the **shorter** of two retentions: data files (`delta.deletedFileRetentionDuration`, default 7 days) and the transaction log (`delta.logRetentionDuration`, default 30 days).
+  - **Up to 30 days** → set only `deletedFileRetentionDuration` (the log already keeps 30 days by default).
+  - **Beyond 30 days** → must raise **both**, e.g.:
+```sql
+    ALTER TABLE t SET TBLPROPERTIES (
+      'delta.deletedFileRetentionDuration' = 'interval 90 days',
+      'delta.logRetentionDuration' = 'interval 90 days'
+    );
+```
+  - For permanent/long-term history, don't use time travel at all — it's short-term recovery. Use DEEP CLONE snapshots or historize in the data (SCD / effective dating).
+
+**Fully automated table = `CLUSTER BY AUTO` (auto layout) + Predictive Optimization enabled (auto maintenance + executes the clustering).**
+
+<br><br2>
