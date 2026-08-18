@@ -30,6 +30,10 @@
       - [**Full reference — everything usable on a streaming table (Python)**](#full-reference--everything-usable-on-a-streaming-table-python)
       - [**`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)](#create-flow-python--multiple-sources-into-one-streaming-table-fan-in)
       - [**Overview of `dp.methods`**](#overview-of-dpmethods)
+    - [**`Slowly Changing Dimensions with AUTO CDC`**](#slowly-changing-dimensions-with-auto-cdc)
+      - [`SCD Type_1`](#scd-type_1)
+      - [`SCD Type_2`](#scd-type_2)
+      - [`Command Overview`](#command-overview)
     - [**`External sink → Delta + UniForm (Iceberg-readable)`**](#external-sink--delta--uniform-iceberg-readable)
       - [**`Managed table vs sink`**](#managed-table-vs-sink)
       - [**`Sink types`**](#sink-types)
@@ -45,10 +49,10 @@
     - [Provider setup (off Databricks / open-source server)](#provider-setup-off-databricks--open-source-server)
   - [`Query Federation (Lakehouse Federation)`](#query-federation-lakehouse-federation)
   - [`Modularization`](#modularization)
-    - [**1. `import` — from a `.py` module**](#1-import--from-a-py-module)
-    - [**2. `%run` — inline another notebook**](#2-run--inline-another-notebook)
-    - [3. `dbutils.notebook.run()` — run a notebook as a separate job\*\*](#3-dbutilsnotebookrun--run-a-notebook-as-a-separate-job)
-    - [brak\_down](#brak_down)
+    - [1. `import` — from a `.py` module](#1-import--from-a-py-module)
+    - [2. `%run` — inline another notebook](#2-run--inline-another-notebook)
+    - [3. `dbutils.notebook.run()` — run a notebook as a separate job](#3-dbutilsnotebookrun--run-a-notebook-as-a-separate-job)
+    - [`break_down`](#break_down)
   - [Spark SQL](#spark-sql)
   - [PySpark](#pyspark)
   - [Databricks-specific vs open-source Spark](#databricks-specific-vs-open-source-spark)
@@ -87,8 +91,6 @@
 | `Ctrl+R` | Open Recent — quickly reopen recent folders / workspace files. |
 | `Ctrl+B` | Toggle the side bar (Explorer etc.) — hide it to get more editing space. |
 | `` Ctrl+` `` | Toggle the integrated terminal. |
-
-
 
 <br><br>
 
@@ -179,7 +181,6 @@ Python's `sys` module — interacting with the interpreter and runtime environme
 <br><br>
 
 ## databricks YAML (DAB structure)
-
 
 ### `bundle`
 ```yaml
@@ -301,7 +302,6 @@ Two independent settings combine — one from each axis:
 Note: Dev/Prod and Triggered/Continuous are **separate axes** — any of the 4 combinations is valid. 
 
 <br>
-
 
 ### **`SQL`**
 
@@ -604,6 +604,120 @@ def orders_us():
 
 <br><br>
 
+### **`Slowly Changing Dimensions with AUTO CDC`**
+
+`AUTO CDC INTO` (formerly `APPLY CHANGES INTO` in DLT) applies inserts, updates and deletes from a source change feed into a target streaming table — replacing a traditional batch job with complex `MERGE INTO` logic. INSERTs and UPDATEs are handled implicitly via the `KEYS`, no coding required.
+
+- **SDP only** — `AUTO CDC` doesn't exist outside a pipeline; in a classic job you'd write `MERGE INTO` yourself.
+- Snapshot-based variant: `AUTO CDC FROM SNAPSHOT` / `create_auto_cdc_from_snapshot_flow()` — for sources that send full snapshots instead of a change feed.
+- SCD **type 1** = overwrite (current state only) · **type 2** = keep history (start/end validity per row).
+  
+<br>
+
+#### `SCD Type_1`
+
+**SQL**
+
+```sql
+-- 1. target streaming table (empty, no source)
+CREATE OR REFRESH STREAMING TABLE customers;
+
+-- 2. CDC flow that populates it
+CREATE FLOW scd_type_1_flow AS
+AUTO CDC INTO customers
+FROM STREAM updates
+KEYS (CustomerID)
+APPLY AS DELETE WHEN operation = "DELETE"
+SEQUENCE BY ProcessDate
+COLUMNS * EXCEPT (operation)
+STORED AS SCD TYPE 1;
+```
+
+ **Python**
+
+```python
+from pyspark import pipelines as dp
+# 1. target streaming table (empty, no source)
+dp.create_streaming_table("customers")
+
+# 2. CDC flow that populates it
+dp.create_auto_cdc_flow(
+    target="customers",
+    source="updates",
+    keys=["CustomerID"],
+    sequence_by="ProcessDate",
+    apply_as_deletes="operation = 'DELETE'",
+    except_column_list=["operation"],
+    stored_as_scd_type=1
+)
+```
+<br>
+
+#### `SCD Type_2`
+
+Type 2 keeps **history**: instead of overwriting, each change closes the old row and inserts a new one. SDP adds validity columns automatically (`__START_AT` / `__END_AT`, typed after the `SEQUENCE BY` column). The current row has `__END_AT = NULL`.
+
+**SQL**
+```sql
+-- 1. target streaming table (empty, no source)
+CREATE OR REFRESH STREAMING TABLE customers;
+
+-- 2. CDC flow that populates it
+CREATE FLOW scd_type_2_flow AS
+AUTO CDC INTO customers
+FROM STREAM updates
+KEYS (CustomerID)
+APPLY AS DELETE WHEN operation = "DELETE"
+APPLY AS TRUNCATE WHEN operation = "TRUNCATE"
+SEQUENCE BY ProcessDate
+COLUMNS * EXCEPT (operation)
+STORED AS SCD TYPE 2
+TRACK HISTORY ON * EXCEPT (last_seen_at);
+```
+
+**Python**
+```python
+from pyspark import pipelines as dp
+
+# 1. target streaming table (empty, no source)
+dp.create_streaming_table("customers")
+
+# 2. CDC flow that populates it
+dp.create_auto_cdc_flow(
+    target="customers",
+    source="updates",
+    keys=["CustomerID"],
+    sequence_by="ProcessDate",
+    apply_as_deletes="operation = 'DELETE'",
+    apply_as_truncates="operation = 'TRUNCATE'",
+    except_column_list=["operation"],
+    stored_as_scd_type=2,
+    track_history_except_column_list=["last_seen_at"]
+)
+```
+<br>
+
+#### `Command Overview`
+
+| SQL | Python | What it does |
+| --- | --- | --- |
+| **Shared clauses** | | |
+| `AUTO CDC INTO <target>` | `create_auto_cdc_flow(target=...)` | Applies updates, inserts and deletes to the **target** table. |
+| `FROM STREAM <source>` | `source=...` | Source records that determine updates, deletes and inserts. |
+| `KEYS (col, ...)` | `keys=["col"]` | Column(s) that **uniquely identify a row** in source and target. |
+| `APPLY AS DELETE WHEN <cond>` | `apply_as_deletes="cond"` | When a CDC event should be treated as a **DELETE** rather than an upsert. |
+| `SEQUENCE BY <col>` | `sequence_by="col"` | **Logical order** of CDC events in the source data (handles out-of-order arrivals). |
+| `COLUMNS * EXCEPT (col)` | `except_column_list=["col"]` | Subset of columns to include in the target. |
+| `STORED AS SCD TYPE 1 \| 2` | `stored_as_scd_type=1` | Store records as **SCD type 1** (default, overwrite) or **type 2** (keep history). |
+| **SCD type 2 specific** | | |
+| `STORED AS SCD TYPE 2` | `stored_as_scd_type=2` | Keep history — close the old row, insert a new one on change. |
+| `TRACK HISTORY ON *` | `track_history_column_list=[...]` | Which columns trigger a **new history row** when they change. `*` = all. |
+| `TRACK HISTORY ON * EXCEPT (col)` | `track_history_except_column_list=["col"]` | All columns **except** these trigger a new row — for columns that change constantly but aren't business-relevant. |
+| **SCD type 1 only** | | |
+| `APPLY AS TRUNCATE WHEN <cond>` | `apply_as_truncates="cond"` | Treat the event as a full-table truncate. **Not supported with type 2.** |
+
+<br><br>
+
 ### **`External sink → Delta + UniForm (Iceberg-readable)`**
 
 An external sink writes pipeline data to a **plain Delta table outside the pipeline's managed scope**. Because you fully own that table, you get **full Delta property control** — including UniForm, so it's readable as Iceberg (which managed streaming tables / materialized views **cannot** do).
@@ -659,8 +773,13 @@ UniForm (Universal Format) is **part of open-source Delta Lake** (not Databricks
 #### **`Enabling Iceberg reads — the 4 table properties`**
 
 ```sql
+-- Step 1: disable deletion vectors first (must be its own commit —
+-- IcebergCompatV2 can't be enabled while deletion vectors are present)
+ALTER TABLE my_catalog.my_schema.orders_external
+SET TBLPROPERTIES ('delta.enableDeletionVectors' = 'false');
+
+-- Step 2: enable Iceberg compatibility + UniForm
 ALTER TABLE my_catalog.my_schema.orders_external SET TBLPROPERTIES (
-  'delta.enableDeletionVectors'          = 'false',
   'delta.columnMapping.mode'             = 'name',
   'delta.enableIcebergCompatV2'          = 'true',
   'delta.universalFormat.enabledFormats' = 'iceberg'
@@ -896,7 +1015,7 @@ SELECT * FROM pg_catalog.public.customers;
 
 Three ways to reuse code from elsewhere in Databricks. Different use cases — don't confuse them.
 
-### **1. `import` — from a `.py` module**
+### 1. `import` — from a `.py` module
 
 Standard Python import from a `.py` file in your workspace/repo (Git folders). Best for structured projects with real modules. The module must be on the Python path — either in the same repo/folder, or add its path:
 
@@ -909,7 +1028,7 @@ from my_module import validate_df
 result = validate_df(df)
 ```
 
-### **2. `%run` — inline another notebook**
+### 2. `%run` — inline another notebook
 
 Pastes the other notebook's content into yours — all its functions/variables become available. Shared context (same variables, same spark session).
 
@@ -920,7 +1039,7 @@ Pastes the other notebook's content into yours — all its functions/variables b
 result = my_validation_function(df)
 ```
 
-### 3. `dbutils.notebook.run()` — run a notebook as a separate job**
+### 3. `dbutils.notebook.run()` — run a notebook as a separate job
 
 Runs another notebook in an **isolated** context (separate run). You do NOT share functions/variables — only a single string value comes back via `dbutils.notebook.exit()`.
 
@@ -943,7 +1062,8 @@ dbutils.notebook.exit("PASS")   # ends the child + sends "PASS" back to parent
 - Params: parent sends a **dict** (3rd arg) → child reads each with `dbutils.widgets.get("name")`. Dict key must match the widget name.
 - `dbutils.notebook.exit(value)` ends the notebook immediately (code after it doesn't run) and returns `value`. Can appear in multiple branches (e.g. inside `if/else`) — whichever the run reaches. Value is always a string (use JSON for more).
 
-### brak_down
+### `break_down`
+
 **Comparison:**
 
 | Method | Source | Shares context? | Returns |
@@ -975,8 +1095,6 @@ dbutils.notebook.exit("PASS")   # ends the child + sends "PASS" back to parent
 | `CREATE TABLE <table_name> ... COMMENT 'comment'` | Sets a comment **at creation time**.
 | `ALTER TABLE <table_name> SET TBLPROPERTIES ('comment' = 'comment')` | Alternative way to set a table comment via table properties. |
 | `COMMENT ON COLUMN <table_name>.col IS 'comment'` | Adds/updates a comment on a specific **column**. |
-
-
 
 <br><br>
 
@@ -1074,7 +1192,6 @@ Admins = platform scope (account → metastore → workspace). Owner = a specifi
 - `BROWSE` — discover/see an object without usage rights (for discovery).
 
 <br><br>
-
 
 ## **Debugging**
 <br>
