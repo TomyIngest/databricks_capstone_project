@@ -17,36 +17,38 @@
   - [PowerShell helpers](#powershell-helpers)
     - [List clusters across all profiles](#list-clusters-across-all-profiles)
 - [🟡 Data Engineering](#-data-engineering)
-  - [Concepts](#concepts)
-    - [`Lakeflow Spark Declarative Pipelines (SDP)`](#lakeflow-spark-declarative-pipelines-sdp)
-      - [**`SQL`**](#sql)
-        - [**Streaming table from Auto Loader (`read_files`)**](#streaming-table-from-auto-loader-read_files)
-        - [**Streaming table from another pipeline table (`STREAM(table)`)** — between layers (bronze → silver)](#streaming-table-from-another-pipeline-table-streamtable--between-layers-bronze--silver)
-        - [**Materialized view** (batch — no `STREAM`)](#materialized-view-batch--no-stream)
-        - [**Expectations / constraints — `ON VIOLATION` actions**](#expectations--constraints--on-violation-actions)
-        - [**Schema options inside `read_files(...) only`** — format `option => 'value'`](#schema-options-inside-read_files-only--format-option--value)
-        - [**Full reference — everything usable on a streaming table**](#full-reference--everything-usable-on-a-streaming-table)
-        - [**`CREATE FLOW`** — separate the target table from the flow(s) that write into it](#create-flow--separate-the-target-table-from-the-flows-that-write-into-it)
-      - [**`Python`**](#python)
-        - [**Full reference — everything usable on a streaming table (Python)**](#full-reference--everything-usable-on-a-streaming-table-python)
-        - [**`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)](#create-flow-python--multiple-sources-into-one-streaming-table-fan-in)
-        - [**Overview of `dp.methods`**](#overview-of-dpmethods)
-      - [**`External sink → Delta + UniForm (Iceberg-readable)`**](#external-sink--delta--uniform-iceberg-readable)
-        - [**`Managed table vs sink`**](#managed-table-vs-sink)
-        - [**`Sink types`**](#sink-types)
-        - [**`Create the sink (Python, in the pipeline)`**](#create-the-sink-python-in-the-pipeline)
-        - [**`UniForm — Delta / Iceberg / Hudi interop`**](#uniform--delta--iceberg--hudi-interop)
-        - [**`Enabling Iceberg reads — the 4 table properties`**](#enabling-iceberg-reads--the-4-table-properties)
-        - [**`Verify Iceberg metadata was generated`**](#verify-iceberg-metadata-was-generated)
-    - [`Auto Loader`](#auto-loader)
-      - [`_rescued_data`](#_rescued_data)
-      - [`Options`](#options)
-    - [`Delta Sharing`](#delta-sharing)
-      - [Provider setup (D2D / Unity Catalog)](#provider-setup-d2d--unity-catalog)
-      - [Provider setup (off Databricks / open-source server)](#provider-setup-off-databricks--open-source-server)
-    - [`Query Federation (Lakehouse Federation)`](#query-federation-lakehouse-federation)
-    - [`Pipeline execution modes (Lakeflow Declarative Pipelines)`](#pipeline-execution-modes-lakeflow-declarative-pipelines)
-    - [`Modularization`](#modularization)
+  - [`Lakeflow Spark Declarative Pipelines (SDP)`](#lakeflow-spark-declarative-pipelines-sdp)
+    - [**`SQL`**](#sql)
+      - [**Streaming table from Auto Loader (`read_files`)**](#streaming-table-from-auto-loader-read_files)
+      - [**Streaming table from another pipeline table (`STREAM(table)`)** — between layers (bronze → silver)](#streaming-table-from-another-pipeline-table-streamtable--between-layers-bronze--silver)
+      - [**Materialized view** (batch — no `STREAM`)](#materialized-view-batch--no-stream)
+      - [**Expectations / constraints — `ON VIOLATION` actions**](#expectations--constraints--on-violation-actions)
+      - [**Schema options inside `read_files(...) only`** — format `option => 'value'`](#schema-options-inside-read_files-only--format-option--value)
+      - [**Full reference — everything usable on a streaming table**](#full-reference--everything-usable-on-a-streaming-table)
+      - [**`CREATE FLOW`** — separate the target table from the flow(s) that write into it](#create-flow--separate-the-target-table-from-the-flows-that-write-into-it)
+    - [**`Python`**](#python)
+      - [**Full reference — everything usable on a streaming table (Python)**](#full-reference--everything-usable-on-a-streaming-table-python)
+      - [**`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)](#create-flow-python--multiple-sources-into-one-streaming-table-fan-in)
+      - [**Overview of `dp.methods`**](#overview-of-dpmethods)
+    - [**`External sink → Delta + UniForm (Iceberg-readable)`**](#external-sink--delta--uniform-iceberg-readable)
+      - [**`Managed table vs sink`**](#managed-table-vs-sink)
+      - [**`Sink types`**](#sink-types)
+      - [**`Create the sink (Python, in the pipeline)`**](#create-the-sink-python-in-the-pipeline)
+      - [**`UniForm — Delta / Iceberg / Hudi interop`**](#uniform--delta--iceberg--hudi-interop)
+      - [**`Enabling Iceberg reads — the 4 table properties`**](#enabling-iceberg-reads--the-4-table-properties)
+      - [**`Verify Iceberg metadata was generated`**](#verify-iceberg-metadata-was-generated)
+  - [`Auto Loader`](#auto-loader)
+    - [`_rescued_data`](#_rescued_data)
+    - [`Options`](#options)
+  - [`Delta Sharing`](#delta-sharing)
+    - [Provider setup (D2D / Unity Catalog)](#provider-setup-d2d--unity-catalog)
+    - [Provider setup (off Databricks / open-source server)](#provider-setup-off-databricks--open-source-server)
+  - [`Query Federation (Lakehouse Federation)`](#query-federation-lakehouse-federation)
+  - [`Modularization`](#modularization)
+    - [**1. `import` — from a `.py` module**](#1-import--from-a-py-module)
+    - [**2. `%run` — inline another notebook**](#2-run--inline-another-notebook)
+    - [3. `dbutils.notebook.run()` — run a notebook as a separate job\*\*](#3-dbutilsnotebookrun--run-a-notebook-as-a-separate-job)
+    - [brak\_down](#brak_down)
   - [Spark SQL](#spark-sql)
   - [PySpark](#pyspark)
   - [Databricks-specific vs open-source Spark](#databricks-specific-vs-open-source-spark)
@@ -256,11 +258,7 @@ databricks auth profiles -o json | ConvertFrom-Json |
 # 🟡 Data Engineering
 <br>
 
-## Concepts
-
-<br>
-
-### `Lakeflow Spark Declarative Pipelines (SDP)`
+## `Lakeflow Spark Declarative Pipelines (SDP)`
 
 Declarative framework for batch & streaming ETL in SQL/Python. **DLT → Lakeflow (Spark) Declarative Pipelines / SDP** — DLT (Delta Live Tables) was the original name, now Lakeflow pipelines. Old DLT code runs without migration. Terminology on the test: DLT = old name, Lakeflow pipelines / SDP = current. Auto Loader inside SDP is `read_files()` (replaced the old `cloud_files()`); schema and checkpoint dirs are managed automatically by the framework.
 <br>
@@ -276,9 +274,38 @@ Declarative framework for batch & streaming ETL in SQL/Python. **DLT → Lakeflo
 
 Trade-off: external sink gives **full Delta property control** (properties, `ALTER TABLE`, UniForm/Iceberg) but loses the built-in framework features above.
 
-#### **`SQL`**
+<br>
 
-##### **Streaming table from Auto Loader (`read_files`)**
+**`Pipeline execution modes (Lakeflow Declarative Pipelines)`**
+
+Two independent settings combine — one from each axis:
+- **Development vs Production** = how the pipeline behaves (cluster lifecycle + retries).
+- **Triggered vs Continuous** = how long/often it runs.
+
+| Setting | What it does |
+| --- | --- |
+| **Development** | Cluster is **reused** (not torn down) for fast iteration; **no automatic retries** on failure (see errors immediately). For building/debugging. |
+| **Production** | Cluster is **terminated** after the run (saves cost); **retry logic** applied on failure (resilient). For real runs. |
+| **Triggered** | Runs once, processes currently available data, then **stops**. Batch-like — for scheduled runs. |
+| **Continuous** | Runs **non-stop**, processing data as it arrives (real-time / near-real-time). |
+
+**The 4 combinations:**
+
+| Combination | What it means in practice |
+| --- | --- |
+| **Development + Triggered** | Building/debugging a batch pipeline. Cluster stays warm between runs, no retries, processes available data then stops. Fastest iteration loop. |
+| **Development + Continuous** | Building/debugging a streaming pipeline. Runs non-stop with a reused cluster and no retries — you watch it process live data and see failures instantly. |
+| **Production + Triggered** | Scheduled batch job in prod. Spins up a cluster, processes available data, tears the cluster down, retries on failure. Cost-efficient scheduled ingestion. |
+| **Production + Continuous** | Always-on streaming job in prod. Runs continuously with retry logic; cluster stays up because the pipeline never stops. Real-time production processing. |
+
+Note: Dev/Prod and Triggered/Continuous are **separate axes** — any of the 4 combinations is valid. 
+
+<br>
+
+
+### **`SQL`**
+
+#### **Streaming table from Auto Loader (`read_files`)**
 ```sql
 CREATE OR REFRESH STREAMING TABLE bronze_orders(
   CONSTRAINT valid_id     EXPECT (id IS NOT NULL),                                 -- warn
@@ -289,7 +316,7 @@ SELECT *
 FROM STREAM read_files('/path/to/landing', format => 'json');
 ```
 
-##### **Streaming table from another pipeline table (`STREAM(table)`)** — between layers (bronze → silver)
+#### **Streaming table from another pipeline table (`STREAM(table)`)** — between layers (bronze → silver)
 ```sql
 CREATE OR REFRESH STREAMING TABLE silver_orders(
   CONSTRAINT valid_id     EXPECT (id IS NOT NULL),                           -- warn
@@ -299,7 +326,7 @@ CREATE OR REFRESH STREAMING TABLE silver_orders(
 SELECT * FROM STREAM(bronze_orders);
 ```
 
-##### **Materialized view** (batch — no `STREAM`)
+#### **Materialized view** (batch — no `STREAM`)
 ```sql
 CREATE OR REFRESH MATERIALIZED VIEW orders_summary(
   CONSTRAINT valid_total EXPECT (total IS NOT NULL),                    -- warn
@@ -315,7 +342,7 @@ GROUP BY customer_id;
 - `STREAM read_files(...)` = Auto Loader; `STREAM(table)` = stream from another pipeline table.
 - Expectations work on all three (streaming table from read_files, from STREAM(table), and materialized view) — but only inside an SDP pipeline.
 
-##### **Expectations / constraints — `ON VIOLATION` actions**
+#### **Expectations / constraints — `ON VIOLATION` actions**
 
 | Syntax | Action on violation |
 | --- | --- |
@@ -323,7 +350,7 @@ GROUP BY customer_id;
 | `CONSTRAINT name EXPECT (cond) ON VIOLATION DROP ROW` | **Drop** — invalid record **discarded** before writing |
 | `CONSTRAINT name EXPECT (cond) ON VIOLATION FAIL UPDATE` | **Fail** — **stops the whole pipeline** on an invalid record |
 
-##### **Schema options inside `read_files(...) only`** — format `option => 'value'`
+#### **Schema options inside `read_files(...) only`** — format `option => 'value'`
 This can be used only with read_files and not sith stream(table) or materialized view
 
 | Option | What it does / values | Default if omitted |
@@ -335,7 +362,7 @@ This can be used only with read_files and not sith stream(table) or materialized
 | `schemaEvolutionMode => '...'` | Behaviour on a **new column**:<br>`addNewColumns` — stream fails with `UnknownFieldException`, adds the new column on restart<br>`rescue` — new column not added to schema, data goes to `_rescued_data`, stream doesn't fail<br>`failOnNewColumns` — stream fails, must fix schema manually<br>`none` — new columns ignored, nothing added or rescued | `addNewColumns` |
 | `schemaLocation => '...'` | Where the inferred schema is stored | managed automatically by SDP |
 
-##### **Full reference — everything usable on a streaming table**
+#### **Full reference — everything usable on a streaming table**
 
 ```sql
 CREATE OR REFRESH STREAMING TABLE bronze_orders(
@@ -419,7 +446,7 @@ FROM STREAM read_files(
 
 <br>
 
-##### **`CREATE FLOW`** — separate the target table from the flow(s) that write into it
+#### **`CREATE FLOW`** — separate the target table from the flow(s) that write into it
 
 Normally a streaming table defines the table and its source together. `CREATE FLOW` splits them: define an empty target table, then one or more flows that write into it. Main use case: **multiple sources into one streaming table (fan-in)** — a normal `CREATE STREAMING TABLE ... AS SELECT` has only one source.
 
@@ -443,9 +470,9 @@ SELECT * FROM STREAM read_files('/us/orders', format => 'json');
 <br><br>
 
 
-#### **`Python`**
+### **`Python`**
 
-##### **Full reference — everything usable on a streaming table (Python)**
+#### **Full reference — everything usable on a streaming table (Python)**
 
 ```python
 from pyspark import pipelines as dp
@@ -508,7 +535,7 @@ def bronze_orders():
 
 <br>
 
-##### **`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)
+#### **`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)
 
 ```python
 from pyspark import pipelines as dp
@@ -534,7 +561,7 @@ def orders_us():
     )
 ```
 
-##### **Overview of `dp.methods`** 
+#### **Overview of `dp.methods`** 
 
 **Dataset definition**
 
@@ -577,13 +604,13 @@ def orders_us():
 
 <br><br>
 
-#### **`External sink → Delta + UniForm (Iceberg-readable)`**
+### **`External sink → Delta + UniForm (Iceberg-readable)`**
 
 An external sink writes pipeline data to a **plain Delta table outside the pipeline's managed scope**. Because you fully own that table, you get **full Delta property control** — including UniForm, so it's readable as Iceberg (which managed streaming tables / materialized views **cannot** do).
 
 `create_sink` is **Python only** (no SQL). Format is `delta` or `kafka`; only `append_flow` is supported; expectations are **not** supported on sinks; UC table names must be fully qualified (`<catalog>.<schema>.<table>`).
 
-##### **`Managed table vs sink`**
+#### **`Managed table vs sink`**
 
 | Managed table (default) | Sink |
 | --- | --- |
@@ -592,7 +619,7 @@ An external sink writes pipeline data to a **plain Delta table outside the pipel
 | Supports expectations and CDC | Supports Kafka, Event Hubs, custom targets |
 | Streaming tables and materialized views | No expectations — append only |
 
-##### **`Sink types`**
+#### **`Sink types`**
 
 | Sink | What it is | Use cases |
 | --- | --- | --- |
@@ -601,7 +628,7 @@ An external sink writes pipeline data to a **plain Delta table outside the pipel
 | **Azure Event Hubs** | uses Kafka interface format | real-time event streaming · fraud detection · recommendations |
 | **Python Custom** | write to any data store (PySpark custom data sources) | maximum flexibility |
 
-##### **`Create the sink (Python, in the pipeline)`**
+#### **`Create the sink (Python, in the pipeline)`**
 
 ```python
 from pyspark import pipelines as dp
@@ -620,7 +647,7 @@ def to_orders_sink():
 - Use explicit keyword args (`name=`, `format=`, `options=`) — don't rely on positional order.
 - Trade-off: a sink gives Delta/UniForm freedom but loses SDP managed-table features (DAG orchestration, incremental logic, expectations, auto-optimization, lineage).
 
-##### **`UniForm — Delta / Iceberg / Hudi interop`**
+#### **`UniForm — Delta / Iceberg / Hudi interop`**
 
 UniForm (Universal Format) is **part of open-source Delta Lake** (not Databricks-only). All three formats store data as Parquet and differ only in the metadata layer, so UniForm generates Iceberg/Hudi metadata alongside Delta — **one copy of data**, no duplication.
 
@@ -629,7 +656,7 @@ UniForm (Universal Format) is **part of open-source Delta Lake** (not Databricks
 - External Iceberg clients (Trino, Snowflake, Spark w/ Iceberg) read it via the generated `metadata.json`, or via Unity Catalog exposed as an **Iceberg REST catalog**.
 - Databricks itself always reads the table natively as Delta — "reading as Iceberg" needs a second engine.
 
-##### **`Enabling Iceberg reads — the 4 table properties`**
+#### **`Enabling Iceberg reads — the 4 table properties`**
 
 ```sql
 ALTER TABLE my_catalog.my_schema.orders_external SET TBLPROPERTIES (
@@ -647,7 +674,7 @@ ALTER TABLE my_catalog.my_schema.orders_external SET TBLPROPERTIES (
 | `delta.enableIcebergCompatV2` | `true` | Activates Delta's write protocol compatible with Iceberg v2 — lets Iceberg clients read Delta tables without data conversion. |
 | `delta.universalFormat.enabledFormats` | `iceberg` | Triggers async Iceberg metadata generation after every Delta commit — keeps Iceberg views up to date for external tools. |
 
-##### **`Verify Iceberg metadata was generated`**
+#### **`Verify Iceberg metadata was generated`**
 
 ```sql
 DESCRIBE EXTENDED my_catalog.my_schema.orders_external;
@@ -657,11 +684,11 @@ DESCRIBE EXTENDED my_catalog.my_schema.orders_external;
 
 <br><br>
 
-### `Auto Loader`
+## `Auto Loader`
 
 Auto Loader incrementally ingests new files from cloud storage (S3 / ADLS / GCS) into Delta tables. It's a Structured Streaming source with format `cloudFiles`. It tracks already-processed files in the **checkpoint** (RocksDB key-value store), so it's idempotent — each file is processed once. Configured entirely through `cloudFiles.*` read options. Use it for recurring/continuous ingestion; use `COPY INTO` for one-shot batch backfills.
 
-#### `_rescued_data` 
+### `_rescued_data` 
  captures any data that doesn't fit the schema (extra columns, type mismatches) — so nothing is silently lost. It's controlled by the `cloudFiles.rescuedDataColumn` option, but whether it appears **by default** depends on how the schema is set.
 
 **With schema inference (no explicit schema):**
@@ -689,7 +716,7 @@ Auto Loader incrementally ingests new files from cloud storage (S3 / ADLS / GCS)
 | Explicit schema + `rescuedDataColumn` | Yes, your name | `none` |
 
 
-#### `Options`
+### `Options`
 | Option | What it does |
 | --- | --- |
 | `cloudFiles.format` | The underlying file format: `json`, `csv`, `parquet`, `avro`, `text`, `binaryFile`. Required. |
@@ -754,7 +781,7 @@ SELECT * FROM read_files('/Volumes/cat/sch/vol/raw/', format => 'json');
 
 <br><br>
 
-### `Delta Sharing`
+## `Delta Sharing`
 
 Open protocol for sharing live data without copying. Recipient reads in place, read-only. Databricks-originated but open — recipient doesn't need Databricks. Two provider setups:
 
@@ -767,7 +794,7 @@ Open protocol for sharing live data without copying. Recipient reads in place, r
 
 <br>
 
-#### <mark style="background-color: #FFF3CD">Provider setup (D2D / Unity Catalog)</mark>
+### <mark style="background-color: #FFF3CD">Provider setup (D2D / Unity Catalog)</mark>
 
 Order: **SHARE → ADD TABLE → RECIPIENT → GRANT.** These are UC governance commands, not DataFrame API — Python just wraps the same SQL.
 
@@ -793,7 +820,7 @@ Revoke: `REVOKE` / `DROP RECIPIENT` / `ALTER SHARE ... REMOVE TABLE`.
 
 <br>
 
-#### <mark style="background-color: #FFF3CD">Provider setup (off Databricks / open-source server)</mark>
+### <mark style="background-color: #FFF3CD">Provider setup (off Databricks / open-source server)</mark>
 
 No SQL — the provider runs an open-source Delta Sharing server and defines everything in `config.yaml`. Same `share → schema → table` hierarchy, expressed as YAML. The server is the gatekeeper; `location` points at the Delta table in cloud storage.
 
@@ -833,7 +860,7 @@ df = (spark.read
 
 <br><br>
 
-### `Query Federation (Lakehouse Federation)`
+## `Query Federation (Lakehouse Federation)`
 
 Query data in **external databases** (PostgreSQL, MySQL, Snowflake, Redshift, SQL Server, BigQuery...) directly from Databricks — **without copying/ingesting it first**. The data stays in the source; you query it remotely as if it were a Unity Catalog table.
 
@@ -865,37 +892,11 @@ SELECT * FROM pg_catalog.public.customers;
 
 <br><br>
 
-### `Pipeline execution modes (Lakeflow Declarative Pipelines)`
-
-Two independent settings combine — one from each axis:
-- **Development vs Production** = how the pipeline behaves (cluster lifecycle + retries).
-- **Triggered vs Continuous** = how long/often it runs.
-
-| Setting | What it does |
-| --- | --- |
-| **Development** | Cluster is **reused** (not torn down) for fast iteration; **no automatic retries** on failure (see errors immediately). For building/debugging. |
-| **Production** | Cluster is **terminated** after the run (saves cost); **retry logic** applied on failure (resilient). For real runs. |
-| **Triggered** | Runs once, processes currently available data, then **stops**. Batch-like — for scheduled runs. |
-| **Continuous** | Runs **non-stop**, processing data as it arrives (real-time / near-real-time). |
-
-**The 4 combinations:**
-
-| Combination | What it means in practice |
-| --- | --- |
-| **Development + Triggered** | Building/debugging a batch pipeline. Cluster stays warm between runs, no retries, processes available data then stops. Fastest iteration loop. |
-| **Development + Continuous** | Building/debugging a streaming pipeline. Runs non-stop with a reused cluster and no retries — you watch it process live data and see failures instantly. |
-| **Production + Triggered** | Scheduled batch job in prod. Spins up a cluster, processes available data, tears the cluster down, retries on failure. Cost-efficient scheduled ingestion. |
-| **Production + Continuous** | Always-on streaming job in prod. Runs continuously with retry logic; cluster stays up because the pipeline never stops. Real-time production processing. |
-
-Note: Dev/Prod and Triggered/Continuous are **separate axes** — any of the 4 combinations is valid.
-
-<br><br>
-
-### `Modularization`
+## `Modularization`
 
 Three ways to reuse code from elsewhere in Databricks. Different use cases — don't confuse them.
 
-**1. `import` — from a `.py` module**
+### **1. `import` — from a `.py` module**
 
 Standard Python import from a `.py` file in your workspace/repo (Git folders). Best for structured projects with real modules. The module must be on the Python path — either in the same repo/folder, or add its path:
 
@@ -908,7 +909,7 @@ from my_module import validate_df
 result = validate_df(df)
 ```
 
-**2. `%run` — inline another notebook**
+### **2. `%run` — inline another notebook**
 
 Pastes the other notebook's content into yours — all its functions/variables become available. Shared context (same variables, same spark session).
 
@@ -919,7 +920,7 @@ Pastes the other notebook's content into yours — all its functions/variables b
 result = my_validation_function(df)
 ```
 
-**3. `dbutils.notebook.run()` — run a notebook as a separate job**
+### 3. `dbutils.notebook.run()` — run a notebook as a separate job**
 
 Runs another notebook in an **isolated** context (separate run). You do NOT share functions/variables — only a single string value comes back via `dbutils.notebook.exit()`.
 
@@ -942,6 +943,7 @@ dbutils.notebook.exit("PASS")   # ends the child + sends "PASS" back to parent
 - Params: parent sends a **dict** (3rd arg) → child reads each with `dbutils.widgets.get("name")`. Dict key must match the widget name.
 - `dbutils.notebook.exit(value)` ends the notebook immediately (code after it doesn't run) and returns `value`. Can appear in multiple branches (e.g. inside `if/else`) — whichever the run reaches. Value is always a string (use JSON for more).
 
+### brak_down
 **Comparison:**
 
 | Method | Source | Shares context? | Returns |
