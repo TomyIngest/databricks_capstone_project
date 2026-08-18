@@ -31,6 +31,13 @@
         - [**Full reference — everything usable on a streaming table (Python)**](#full-reference--everything-usable-on-a-streaming-table-python)
         - [**`CREATE FLOW` (Python)** — multiple sources into one streaming table (fan-in)](#create-flow-python--multiple-sources-into-one-streaming-table-fan-in)
         - [**Overview of `dp.methods`**](#overview-of-dpmethods)
+      - [**`External sink → Delta + UniForm (Iceberg-readable)`**](#external-sink--delta--uniform-iceberg-readable)
+        - [**`Managed table vs sink`**](#managed-table-vs-sink)
+        - [**`Sink types`**](#sink-types)
+        - [**`Create the sink (Python, in the pipeline)`**](#create-the-sink-python-in-the-pipeline)
+        - [**`UniForm — Delta / Iceberg / Hudi interop`**](#uniform--delta--iceberg--hudi-interop)
+        - [**`Enabling Iceberg reads — the 4 table properties`**](#enabling-iceberg-reads--the-4-table-properties)
+        - [**`Verify Iceberg metadata was generated`**](#verify-iceberg-metadata-was-generated)
     - [`Auto Loader`](#auto-loader)
       - [`_rescued_data`](#_rescued_data)
       - [`Options`](#options)
@@ -567,6 +574,86 @@ def orders_us():
 | Method | What it does |
 | --- | --- |
 | `dp.create_sink(...)` | Write pipeline output to an external target (e.g. Kafka, or a Delta table outside the pipeline) |
+
+<br><br>
+
+#### **`External sink → Delta + UniForm (Iceberg-readable)`**
+
+An external sink writes pipeline data to a **plain Delta table outside the pipeline's managed scope**. Because you fully own that table, you get **full Delta property control** — including UniForm, so it's readable as Iceberg (which managed streaming tables / materialized views **cannot** do).
+
+`create_sink` is **Python only** (no SQL). Format is `delta` or `kafka`; only `append_flow` is supported; expectations are **not** supported on sinks; UC table names must be fully qualified (`<catalog>.<schema>.<table>`).
+
+##### **`Managed table vs sink`**
+
+| Managed table (default) | Sink |
+| --- | --- |
+| Data stays within Unity Catalog | Writes to external systems outside Databricks |
+| Full pipeline lineage tracking | Enables reverse ETL / operational use cases |
+| Supports expectations and CDC | Supports Kafka, Event Hubs, custom targets |
+| Streaming tables and materialized views | No expectations — append only |
+
+##### **`Sink types`**
+
+| Sink | What it is | Use cases |
+| --- | --- | --- |
+| **Delta Table** | UC managed or external Delta tables · write by path or table name | external Delta tables |
+| **Apache Kafka** | write back to Kafka topics | low-latency operational · reverse ETL out of Databricks |
+| **Azure Event Hubs** | uses Kafka interface format | real-time event streaming · fraud detection · recommendations |
+| **Python Custom** | write to any data store (PySpark custom data sources) | maximum flexibility |
+
+##### **`Create the sink (Python, in the pipeline)`**
+
+```python
+from pyspark import pipelines as dp
+
+dp.create_sink(
+    name="orders_sink",                                          # object name (not the table name)
+    format="delta",
+    options={"tableName": "my_catalog.my_schema.orders_external"}
+)
+
+@dp.append_flow(target="orders_sink")                            # target = the sink object name
+def to_orders_sink():
+    return spark.readStream.table("silver_orders")
+```
+
+- Use explicit keyword args (`name=`, `format=`, `options=`) — don't rely on positional order.
+- Trade-off: a sink gives Delta/UniForm freedom but loses SDP managed-table features (DAG orchestration, incremental logic, expectations, auto-optimization, lineage).
+
+##### **`UniForm — Delta / Iceberg / Hudi interop`**
+
+UniForm (Universal Format) is **part of open-source Delta Lake** (not Databricks-only). All three formats store data as Parquet and differ only in the metadata layer, so UniForm generates Iceberg/Hudi metadata alongside Delta — **one copy of data**, no duplication.
+
+- Read-only from the Iceberg/Hudi side — writes must go through the Delta protocol.
+- On Databricks, Iceberg is the common target (Hudi arrived later).
+- External Iceberg clients (Trino, Snowflake, Spark w/ Iceberg) read it via the generated `metadata.json`, or via Unity Catalog exposed as an **Iceberg REST catalog**.
+- Databricks itself always reads the table natively as Delta — "reading as Iceberg" needs a second engine.
+
+##### **`Enabling Iceberg reads — the 4 table properties`**
+
+```sql
+ALTER TABLE my_catalog.my_schema.orders_external SET TBLPROPERTIES (
+  'delta.enableDeletionVectors'          = 'false',
+  'delta.columnMapping.mode'             = 'name',
+  'delta.enableIcebergCompatV2'          = 'true',
+  'delta.universalFormat.enabledFormats' = 'iceberg'
+);
+```
+
+| Property | Value | Why |
+| --- | --- | --- |
+| `delta.enableDeletionVectors` | `false` | Iceberg v2 can't represent Delta's soft-delete markers — disabling makes all deletes hard deletes, so the table is fully readable by Iceberg clients. |
+| `delta.columnMapping.mode` | `name` | Keeps column identifiers consistent between Delta and Iceberg schemas — prevents schema drift, enables cross-platform access. |
+| `delta.enableIcebergCompatV2` | `true` | Activates Delta's write protocol compatible with Iceberg v2 — lets Iceberg clients read Delta tables without data conversion. |
+| `delta.universalFormat.enabledFormats` | `iceberg` | Triggers async Iceberg metadata generation after every Delta commit — keeps Iceberg views up to date for external tools. |
+
+##### **`Verify Iceberg metadata was generated`**
+
+```sql
+DESCRIBE EXTENDED my_catalog.my_schema.orders_external;
+-- look for: delta.universalFormat.enabledFormats = iceberg
+--           and an Iceberg metadata location (path to metadata.json)
+```
 
 <br><br>
 
