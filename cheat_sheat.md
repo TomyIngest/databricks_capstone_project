@@ -54,7 +54,12 @@
     - [3. `dbutils.notebook.run()` — run a notebook as a separate job](#3-dbutilsnotebookrun--run-a-notebook-as-a-separate-job)
     - [`break_down`](#break_down)
   - [Spark SQL](#spark-sql)
-  - [PySpark](#pyspark)
+  - [`PySpark`](#pyspark)
+    - [`functions`](#functions)
+    - [`Window Functions`](#window-functions)
+    - [`Pivoting / Unpivoting`](#pivoting--unpivoting)
+      - [`Pivot`](#pivot)
+      - [**`Unpivot`**](#unpivot)
   - [Databricks-specific vs open-source Spark](#databricks-specific-vs-open-source-spark)
 - [🟡 Additional Information on Databricks Platform](#-additional-information-on-databricks-platform)
   - [**Unity Catalog governance**](#unity-catalog-governance)
@@ -1095,15 +1100,181 @@ dbutils.notebook.exit("PASS")   # ends the child + sends "PASS" back to parent
 | `CREATE TABLE <table_name> ... COMMENT 'comment'` | Sets a comment **at creation time**.
 | `ALTER TABLE <table_name> SET TBLPROPERTIES ('comment' = 'comment')` | Alternative way to set a table comment via table properties. |
 | `COMMENT ON COLUMN <table_name>.col IS 'comment'` | Adds/updates a comment on a specific **column**. |
+| `max_by(x, y)` / `min_by(x, y)` | Aggregation function which returns `x` from the row where `y` is max (or min) per group — a **different column** from the winning row, which plain `MAX()` can't do (alternatives: window function or self-join). E.g. `SELECT customer_id, max_by(product, amount) AS biggest_purchase FROM orders GROUP BY customer_id`. Handy for CDC/SCD: `max_by(status, updated_at)` = latest state. |
 
 <br><br>
 
-## PySpark
+## `PySpark`
 <br>
 
+### `functions`
 | Command | What it does |
 | --- | --- |
 | `create_map(*cols)` | Builds a map (key-value) column from alternating key, value columns. E.g. `df.withColumn("m", create_map(lit("a"), col("x"), lit("b"), col("y")))` → map `{a: x, b: y}`. Needs `from pyspark.sql.functions import create_map, lit, col`. |
+| `max_by(x, y)` / `min_by(x, y)` | Aggregation function which returns `x` from the row where `y` is max (or min) per group — a **different column** from the winning row, which plain `max()` can't do (alternatives: window function or self-join). Needs `from pyspark.sql.functions import max_by, min_by`. |
+
+<br>
+
+### `Window Functions`
+
+```python
+# --- basic: ranking within a partition ---
+from pyspark.sql.window import Window
+from pyspark.sql.functions import row_number, rank, dense_rank, lag, lead, col, sum as _sum
+
+w = Window.partitionBy("customer_id").orderBy(col("amount").desc())
+
+df.withColumn("rn", row_number().over(w))
+```
+
+```python
+# --- with an explicit frame: running total ---
+from pyspark.sql.window import Window
+from pyspark.sql.functions import sum as _sum
+
+w_running = (
+    Window
+    .partitionBy("customer_id")
+    .orderBy("order_date")
+    .rowsBetween(Window.unboundedPreceding, Window.currentRow)
+)
+df.withColumn("running_total", _sum("amount").over(w_running))
+```
+
+```python
+ # --- with an explicit frame: from -20 of current sales amount to current sales amount ---
+from pyspark.sql.window import Window
+from pyspark.sql.functions import count
+
+w = (
+    Window
+    .partitionBy("region")
+    .orderBy("sales_amount")
+    .rangeBetween(-20, Window.currentRow)     
+)
+df.withColumn("cnt_within_20", count("*").over(w))
+```
+
+```python
+# --- with an explicit frame: 7 days rolling Range od days ---
+result = spark.sql("""
+    SELECT *,
+           sum(amount) OVER (
+               PARTITION BY customer_id
+               ORDER BY order_date
+               RANGE BETWEEN INTERVAL 6 DAYS PRECEDING AND CURRENT ROW
+           ) AS rolling_7d
+    FROM transactions
+""")
+```
+
+**Window spec building blocks**
+
+| Method | What it does |
+| --- | --- |
+| `Window.partitionBy(cols)` | Splits rows into groups (like `GROUP BY`, but rows stay). |
+| `.orderBy(cols)` | Orders rows within each partition. |
+| `.rowsBetween(start, end)` | Frame by physical row offsets. |
+| `.rangeBetween(start, end)` | Frame by value range of the `orderBy` column. |
+
+**Common window functions**
+
+| Function | What it returns |
+| --- | --- |
+| `row_number()` | Sequential number per partition (1, 2, 3…), no ties. |
+| `rank()` | Rank with gaps on ties (1, 2, 2, 4). |
+| `dense_rank()` | Rank without gaps on ties (1, 2, 2, 3). |
+| `lag(col, n)` | Value from `n` rows before (previous row). |
+| `lead(col, n)` | Value from `n` rows after (next row). |
+| `sum/avg/max/min(col).over(w)` | Running/partitioned aggregate, rows kept. |
+
+**Frame bounds** (for `rowsBetween` / `rangeBetween`):
+- `Window.unboundedPreceding` — start of partition
+- `Window.currentRow` — the current row
+- `Window.unboundedFollowing` — end of partition
+- e.g. running total: `.rowsBetween(Window.unboundedPreceding, Window.currentRow)`
+
+
+
+
+- Ordered functions (`row_number`, `rank`, `lag`, `lead`) **require** `.orderBy`.
+- Aggregate `.over(w)` without a frame + `orderBy` = running aggregate up to current row; without `orderBy` = whole-partition aggregate.
+
+<br>
+
+### `Pivoting / Unpivoting`
+
+#### `Pivot`
+
+Turns row values into columns (long → wide) and **always aggregates** — you can't pivot without an aggregate, because multiple rows landing in one cell must be collapsed.
+
+```python
+df.groupBy("customer_id").pivot("month").sum("amount")
+```
+
+- **`groupBy(...)`** = what stays as rows (the row key). `pivot()` must follow it.
+- **`pivot("col")`** = the single column whose values become new columns. Only **one** column allowed — for multi-dimension pivots, concat first: `concat_ws("_", "month", "region")`.
+- **aggregate** (`sum`, `count`, `first`, `max`…) = **required**, fills each cell.
+
+**Optional value list** — pick specific values of the pivot column (skips the scan for distinct values, faster + you control the output columns):
+```python
+df.groupBy("customer_id").pivot("month", ["Jan", "Feb", "Mar"]).sum("amount")
+# without the list → Spark scans the column and makes a column for every distinct value
+# with the list    → only those columns; other values dropped
+```
+
+**Multiple aggregates** — use `.agg()`, one set of columns per aggregate (`Jan_sum`, `Jan_count`…):
+```python
+df.groupBy("customer_id").pivot("month").agg(sum("amount"), count("*"), avg("amount"))
+```
+
+**Keeping every row (no real aggregation):** pivot always collapses rows sharing the groupBy key. To keep each source row, group by a **unique** key (`order_id`) so nothing merges — the aggregate then has nothing to collapse:
+```python
+df.groupBy("order_id", "customer_id").pivot("month").sum("amount").drop("order_id")
+```
+- Grouping by `(customer_id, amount)` instead risks merging two identical `(customer, month, amount)` rows into one.
+- If the real goal is "spread value into columns without aggregating at all", pivot is the wrong tool — use `when(col("month") == "Jan", col("amount")).alias("Jan")` per column (no `groupBy`, every row stays).
+  
+<br>
+
+#### **`Unpivot`**
+
+The reverse of pivot — turns columns back into rows (wide → long). Native `.unpivot()` since Spark 3.4+.
+
+```python
+df.unpivot(
+    ids=["customer_id"],                     # columns to KEEP — repeated on each melted row
+    values=["January", "February", "March"], # columns to MELT — each becomes a row
+    variableColumnName="month",              # new column holding the old column NAMES
+    valueColumnName="amount"                 # new column holding the VALUES
+)
+```
+
+One wide row → one row per `values` column:
+```
+customer_id | January | February | March          customer_id | month    | amount
+1           | 100     | 200      | 150      →       1           | January  | 100
+                                                    1           | February | 200
+                                                    1           | March    | 150
+```
+
+- Columns not in `ids` or `values` are dropped; a column left out of `values` isn't melted (its data disappears from the result).
+- No aggregation — unpivot only reshapes, it doesn't collapse rows.
+
+**Compound column names** (e.g. after a multi-aggregate pivot: `January_sum`, `January_avg`): unpivot them all into one name column, then `split` it back into month + metric:
+```python
+long = df.unpivot(
+    ids=["customer_id"],
+    values=["January_sum", "January_avg", "February_sum", "February_avg"],
+    variableColumnName="col_name",
+    valueColumnName="value"
+)
+long = (long
+    .withColumn("month",  split(col("col_name"), "_")[0])
+    .withColumn("metric", split(col("col_name"), "_")[1])
+    .drop("col_name"))
+# → customer_id | month | metric | value
+```
 
 <br><br>
 
