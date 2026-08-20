@@ -56,6 +56,8 @@
   - [Spark SQL](#spark-sql)
   - [`PySpark`](#pyspark)
     - [`functions`](#functions)
+    - [`Higher-order functions`](#higher-order-functions)
+      - [`map_filter`](#map_filter)
     - [`Window Functions`](#window-functions)
     - [`Pivoting / Unpivoting`](#pivoting--unpivoting)
       - [`Pivot`](#pivot)
@@ -1112,6 +1114,68 @@ dbutils.notebook.exit("PASS")   # ends the child + sends "PASS" back to parent
 | --- | --- |
 | `create_map(*cols)` | Builds a map (key-value) column from alternating key, value columns. E.g. `df.withColumn("m", create_map(lit("a"), col("x"), lit("b"), col("y")))` → map `{a: x, b: y}`. Needs `from pyspark.sql.functions import create_map, lit, col`. |
 | `max_by(x, y)` / `min_by(x, y)` | Aggregation function which returns `x` from the row where `y` is max (or min) per group — a **different column** from the winning row, which plain `max()` can't do (alternatives: window function or self-join). Needs `from pyspark.sql.functions import max_by, min_by`. |
+
+<br>
+
+### `Higher-order functions`
+Functions that take **another function** (a lambda) as an argument. They apply that lambda across the elements of a complex-type column — array or map — without exploding the rows. The calling function has the number of lambda parameters hard-coded: it invokes your lambda with a fixed count, so your lambda must match it (parameter names are yours, count/order is dictated).
+
+**Array Functions**
+
+| Function | Lambda gets | Example |
+| --- | --- | --- |
+| `transform(arr, fn)` | 1 — element (or 2 with index) | `transform(a, x -> x * 2)` |
+| `filter(arr, fn)` | 1 — element (or 2 with index) | `filter(a, x -> x > 0)` |
+| `exists(arr, fn)` | 1 — element | `exists(a, x -> x > 0)` → bool |
+| `forall(arr, fn)` | 1 — element | `forall(a, x -> x > 0)` → bool |
+| `aggregate(arr, init, fn[, finish])` | 2 — accumulator, element | `aggregate(a, 0, (acc, x) -> acc + x)` |
+| `reduce(arr, init, fn[, finish])` | 2 — accumulator, element | newer alias for `aggregate` |
+| `zip_with(arr1, arr2, fn)` | 2 — element from each | `zip_with(a, b, (x, y) -> x + y)` |
+
+**Map Functions**
+
+| Function | Lambda gets | Example |
+| --- | --- | --- |
+| `map_filter(m, fn)` | 2 — key, value | `map_filter(m, (k, v) -> v > 10)` |
+| `transform_keys(m, fn)` | 2 — key, value | `transform_keys(m, (k, v) -> upper(k))` |
+| `transform_values(m, fn)` | 2 — key, value | `transform_values(m, (k, v) -> v * 2)` |
+| `map_zip_with(m1, m2, fn)` | 3 — key, value1, value2 | `map_zip_with(a, b, (k, v1, v2) -> v1 + v2)` |
+
+<br>
+
+SQL lambda syntax uses `->` (e.g. `(k, v) -> v IS NOT NULL`); PySpark uses `lambda k, v: v.isNotNull()`. Same thing.
+
+<br>
+
+#### `map_filter`
+
+**map_filter**(`map`, `function`) — keeps only the map entries for which the function returns `true`. The function receives `(key, value)` of each pair; the input column **must be MapType** or it errors.
+
+```python
+from pyspark.sql.functions import map_filter
+
+map_filter(col("m"), lambda k, v: v > 10)   # keep pairs whose value > 10
+```
+
+Practical use — a `quality_breaks` column listing only the checks that failed. Each `when(cond, reason)` returns a reason or null; `create_map` builds a map (with nulls); `map_filter` drops the null-valued pairs, leaving only real problems (empty `{}` if the row is clean):
+
+```python
+from pyspark.sql.functions import when, col, lit, create_map, map_filter
+
+df = df.withColumn(
+    "quality_breaks",
+    map_filter(
+        create_map(
+            lit("id"),     when(col("id").isNull(), lit("missing value")),
+            lit("amount"), when(~col("amount").rlike("^[0-9.]+$"), lit("non-numeric")),
+            lit("age"),    when((col("age") < 0) | (col("age") > 120), lit("out of range"))
+        ),
+        lambda k, v: v.isNotNull()      # keeps only the pairs where a check fired
+    )
+)
+```
+
+- Passing a normal `def` works too — pass its **name** without `()`: `map_filter(m, keep_failures)`, where `def keep_failures(k, v): return v.isNotNull()`.
 
 <br>
 
