@@ -7,25 +7,6 @@ bundle:
 include:
   - resources/*.yml
 
-resources:
-  jobs:
-    Testing_Job:
-      name: Testing_Job
-      tasks:
-        - task_key: Run_notebook
-          notebook_task:
-            notebook_path: Notebooks/test.ipynb
-            source: WORKSPACE
-          environment_key: Run_notebook_environment
-      queue:
-        enabled: true
-      environments:
-        - environment_key: Run_notebook_environment
-          spec:
-            environment_version: "5"
-      performance_target: STANDARD
-
-
 targets:
   dev:
     # The default target uses 'mode: development' to create a development copy.
@@ -34,11 +15,12 @@ targets:
     # See also https://docs.databricks.com/dev-tools/bundles/deployment-modes.html.
     mode: development
     workspace:
-      host: https://adb-1290381263006333.13.azuredatabricks.net
-      root_path: /Workspace/Users/tomydata@tsarmirgmail.onmicrosoft.com/DE_Fusion/.bundle/${bundle.name}/${bundle.target}
+      host: https://adb-7405618075213820.0.azuredatabricks.net
+      root_path: /Workspace/Users/tomydata@tsarmirgmail.onmicrosoft.com/bundles/${bundle.name}
   prod:
     mode: production
     workspace:
-      host: https://adb-7405611630905882.2.azuredatabricks.net
+      host: https://adb-7405618075213820.0.azuredatabricks.net
       root_path: /Workspace/Users/tomydata@tsarmirgmail.onmicrosoft.com/DE_Fusion/.bundle/${bundle.name}/${bundle.target}
+      
   

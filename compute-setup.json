@@ -1,11 +1,28 @@
 {
-  "data_security_mode": "DATA_SECURITY_MODE_AUTO",
-  "cluster_name": "Single_Node_F4_0.5_DBU",
-  "kind": "CLASSIC_PREVIEW",
-  "runtime_engine": "STANDARD",
-  "spark_version": "18.x-scala2.13",
-  "node_type_id": "Standard_F4",
-  "autotermination_minutes": 10,
-  "use_ml_runtime": false,
-  "is_single_node": true
+    "num_workers": 0,
+    "cluster_name": "Single_Node_F4_0.5_DBU",
+    "spark_version": "18.x-scala2.13",
+    "spark_conf": {
+        "spark.master": "local[*, 4]",
+        "spark.databricks.cluster.profile": "singleNode"
+    },
+    "azure_attributes": {
+        "first_on_demand": 1,
+        "availability": "ON_DEMAND_AZURE",
+        "spot_bid_max_price": -1
+    },
+    "node_type_id": "Standard_F4",
+    "driver_node_type_id": "Standard_F4",
+    "ssh_public_keys": [],
+    "custom_tags": {
+        "ResourceClass": "SingleNode"
+    },
+    "spark_env_vars": {},
+    "autotermination_minutes": 30,
+    "enable_elastic_disk": true,
+    "init_scripts": [],
+    "enable_local_disk_encryption": false,
+    "data_security_mode": "DATA_SECURITY_MODE_AUTO",
+    "runtime_engine": "STANDARD",
+    "cluster_id": "0806-123501-ztspsgkc"
 }
