@@ -5,7 +5,7 @@ bundle:
   uuid: 27dfbc1c-ddda-4b23-9d50-c7aaef20032d
 
 include:
-  - resources/*.yml
+  - resources/*/*.yml
 
 targets:
   dev:
@@ -17,10 +17,11 @@ targets:
     workspace:
       host: https://adb-7405618075213820.0.azuredatabricks.net
       root_path: /Workspace/Users/tomydata@tsarmirgmail.onmicrosoft.com/bundles/${bundle.name}
-  prod:
+  test:
     mode: production
+    presets:
+      name_prefix: '[testing]: '
     workspace:
-      host: https://adb-7405618075213820.0.azuredatabricks.net
-      root_path: /Workspace/Users/tomydata@tsarmirgmail.onmicrosoft.com/DE_Fusion/.bundle/${bundle.name}/${bundle.target}
-      
+      host: https://adb-7405606590769167.7.azuredatabricks.net
+      root_path: /Workspace/Bundles/${bundle.name}
   

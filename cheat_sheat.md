@@ -1,6 +1,7 @@
 - [🟡 VS Code ](#-vs-code-)
   - [`Shortcuts`](#shortcuts)
 - [🟡 Command Line prompts](#-command-line-prompts)
+  - [General Prompts](#general-prompts)
   - [Install Python \& Configure Virtual Environments](#install-python--configure-virtual-environments)
   - [Check versions](#check-versions)
   - [Install packages into a specific Python](#install-packages-into-a-specific-python)
@@ -102,6 +103,17 @@
 <br><br>
 
 # 🟡 Command Line prompts
+
+<br>
+
+## General Prompts
+
+| Command | What it does |
+| --- | --- |
+| `./` | Current directory. `./file.py` and `file.py` point to the same place — the leading `./` is just explicit. In bash it matters for execution: `./script.sh` runs the script sitting here, while `script.sh` searches `$PATH` and fails. |
+| `../` | One level up. From `resources/jobs/` it lands you in `resources/`. |
+| `../../` | Two levels up. From `resources/jobs/` it lands you in the project root. Chain further as needed (`../../../`). |
+| `/` | Leading slash = absolute path from the filesystem root, ignoring where you currently are. Without it, the path is relative. |
 
 <br>
 
